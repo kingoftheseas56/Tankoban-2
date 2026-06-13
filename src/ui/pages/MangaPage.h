@@ -69,11 +69,11 @@ struct ComicsLibraryRecord;
 struct MangaResult;
 struct SeriesInfo;
 
-class ComicsPage : public QWidget {
+class MangaPage : public QWidget {
     Q_OBJECT
 public:
-    explicit ComicsPage(CoreBridge* bridge, QWidget* parent = nullptr);
-    ~ComicsPage();
+    explicit MangaPage(CoreBridge* bridge, QWidget* parent = nullptr);
+    ~MangaPage();
 
     void activate();
     void triggerScan();
@@ -88,7 +88,7 @@ public:
     void resetToRoot();
 
     // TANKOYOMI_PREMIUM Phase 3 -- MainWindow constructs TorrentClient AFTER
-    // ComicsPage (line ordering: pages first, then TorrentClient hoisted at
+    // MangaPage (line ordering: pages first, then TorrentClient hoisted at
     // MainWindow scope post-SOURCES_SIDEBAR). Mirrors VideosPage's
     // setTorrentClient() pattern. Constructs the TorrentVolumeProvider on
     // first non-null call (idempotent for re-wiring scenarios). Safe to call
@@ -122,7 +122,7 @@ public:
 
     // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) — non-owning accessor
     // so MainWindow can wire the shared MangaDownloadIndex into ComicsDownloadsPage.
-    // Returns nullptr before ComicsPage::activate() completes construction.
+    // Returns nullptr before MangaPage::activate() completes construction.
     MangaDownloadIndex* mangaDownloadIndex() const { return m_mangaDownloadIndex; }
 
     // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — canonical
@@ -430,7 +430,7 @@ private:
                                       const QString& jsonPath,
                                       bool onShelf);
     // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1). Connects all signals from
-    // m_westernDownloader into ComicsPage slots and wires
+    // m_westernDownloader into MangaPage slots and wires
     // m_tyVolumeSeriesView::downloadWesternEditionRequested -> request slot.
     // Called once from setTorrentClient() after m_westernDownloader is constructed.
     void wireWesternDownloader();
@@ -503,7 +503,7 @@ private:
     // title + subtitle for a Tankoyomi-origin entry. Title is the series
     // name (record.title), subtitle is "<ChapterName> • Page X/Y" derived
     // from the cbz filename + the saveProgress JSON's page/pageCount.
-    // Static because it has no ComicsPage state dependencies — keeps it
+    // Static because it has no MangaPage state dependencies — keeps it
     // unit-testable in principle and easy to relocate if the Tankoyomi-
     // exclusive pivot happens later.
     struct ContinueLabels {

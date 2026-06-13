@@ -2,7 +2,7 @@
 #include "GlassBackground.h"
 #include "RootFoldersOverlay.h"
 #include "widgets/ThemePicker.h"
-#include "pages/ComicsPage.h"
+#include "pages/MangaPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
 #include "pages/OrganisePage.h"
@@ -172,7 +172,7 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     DebugLogBuffer::instance().info("mainwindow", "5b-rootfolders-overlay");
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::closeRequested, this, &MainWindow::hideRootFolders);
     connect(m_rootFoldersOverlay, &RootFoldersOverlay::foldersChanged, this, [this]() {
-        if (auto *comics = m_pageStack->findChild<ComicsPage*>())
+        if (auto *comics = m_pageStack->findChild<MangaPage*>())
             comics->triggerScan();
         // §3.8 burn-the-ships backout (2026-05-27, Agent 2): BooksPage no longer
         // folder-scans. Catalogue records own the library; root-folder changes
@@ -265,8 +265,8 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     DebugLogBuffer::instance().info("mainwindow", "5g-constructor-done");
 
     // Connect comics page to reader
-    if (auto *comics = m_pageStack->findChild<ComicsPage*>()) {
-        connect(comics, &ComicsPage::openComic, this, &MainWindow::openComicReader);
+    if (auto *comics = m_pageStack->findChild<MangaPage*>()) {
+        connect(comics, &MangaPage::openComic, this, &MainWindow::openComicReader);
     }
 
     // Connect books page to reader
@@ -622,7 +622,7 @@ void MainWindow::buildTopBar()
     scanBtn->setCursor(Qt::PointingHandCursor);
     scanBtn->setToolTip("Rescan library (F5)");
     connect(scanBtn, &QPushButton::clicked, this, [this]() {
-        if (auto *c = m_pageStack->findChild<ComicsPage*>()) c->triggerScan();
+        if (auto *c = m_pageStack->findChild<MangaPage*>()) c->triggerScan();
         // §3.8 burn-the-ships backout (2026-05-27, Agent 2): rescan on Books =
         // validate catalogue records (orphan cleanup), not folder-scan.
         if (auto *b = m_pageStack->findChild<BooksPage*>())  b->activate();
@@ -704,21 +704,21 @@ void MainWindow::buildPageStack()
     m_pageStack = new QStackedWidget(this);
     dbg("4a-pagestack-created");
 
-    auto *comicsPage = new ComicsPage(m_bridge);
+    auto *comicsPage = new MangaPage(m_bridge);
     m_pageStack->addWidget(comicsPage);
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- ComicsPage emits a full
+    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- MangaPage emits a full
     // LayerEntry per in-page transition. The controller pushes onto the
     // "comics" stack; the topbar Back chevron then has a destination to
     // walk to. Cross-mode pill clicks reset the comics stack to [].
-    connect(comicsPage, &ComicsPage::enteredLayer, this,
+    connect(comicsPage, &MangaPage::enteredLayer, this,
             [this](const tankoban::ui::LayerEntry& e) {
                 if (m_navController) m_navController->pushLayer(e.pageId, e);
             });
-    connect(comicsPage, &ComicsPage::exitedLayer, this, [this]() {
+    connect(comicsPage, &MangaPage::exitedLayer, this, [this]() {
         if (m_navController) m_navController->popLayer(QStringLiteral("comics"));
     });
     // NAV_BACK_ROOT_SEED 2026-05-21 (Agent 5) -- seed a persistent "library"
-    // root layer for Comics. ComicsPage starts with m_mode = Library and
+    // root layer for Comics. MangaPage starts with m_mode = Library and
     // showLibraryMode short-circuits its push on same-mode re-entry, so
     // without this seed the controller stack would be empty until the user
     // navigated INTO the library from elsewhere. First-tile-click at startup
@@ -876,9 +876,9 @@ void MainWindow::buildPageStack()
     m_videosPage->setTorrentClient(torrentClient);
 
     // TANKOYOMI_PREMIUM Phase 3 (2026-05-15) — same pattern as VideosPage
-    // above: hand ComicsPage the shared TorrentClient so its internal
+    // above: hand MangaPage the shared TorrentClient so its internal
     // TorrentVolumeProvider can reach TorrentEngine for premium-volume
-    // downloads. ComicsPage caches both ledger + provider; signals fire on
+    // downloads. MangaPage caches both ledger + provider; signals fire on
     // metadataReady / pieceFinished / torrentError via queued connections.
     comicsPage->setTorrentClient(torrentClient);
 
@@ -945,13 +945,13 @@ void MainWindow::buildPageStack()
 
     // COMICS_DOWNLOADS_SIDEBAR_PAGE 2026-05-26 (Agent 9) - Comics-mode
     // Downloads page accessible from SidebarDrawer's "Downloads" entry
-    // (Comics-only). Reads from MangaDownloadIndex shared with ComicsPage.
+    // (Comics-only). Reads from MangaDownloadIndex shared with MangaPage.
     // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) —
-    // setComicsPage() MUST precede setMangaDownloadIndex() so the display
+    // setMangaPage() MUST precede setMangaDownloadIndex() so the display
     // projection helpers are available during the initial refresh() call.
     m_comicsDownloadsPage = new ComicsDownloadsPage(this);
     m_comicsDownloadsPage->setObjectName(PAGE_COMICS_DOWNLOADS);
-    m_comicsDownloadsPage->setComicsPage(comicsPage);
+    m_comicsDownloadsPage->setMangaPage(comicsPage);
     m_comicsDownloadsPage->setMangaDownloadIndex(comicsPage->mangaDownloadIndex());
     m_pageStack->addWidget(m_comicsDownloadsPage);
     connect(m_comicsDownloadsPage, &ComicsDownloadsPage::backRequested, this, [this]() {
@@ -1069,7 +1069,7 @@ void MainWindow::activatePage(const QString &pageId)
         if (m_pageStack->widget(i)->objectName() == pageId) {
             m_pageStack->setCurrentIndex(i);
             // Activate page on switch
-            if (auto *comics = qobject_cast<ComicsPage*>(m_pageStack->widget(i)))
+            if (auto *comics = qobject_cast<MangaPage*>(m_pageStack->widget(i)))
                 comics->activate();
             if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
                 books->activate();
@@ -1112,7 +1112,7 @@ void MainWindow::resetActivePageToRoot() {
     if (!m_pageStack) return;
     QWidget* cur = m_pageStack->currentWidget();
     if (!cur) return;
-    if (auto* comics = qobject_cast<ComicsPage*>(cur)) {
+    if (auto* comics = qobject_cast<MangaPage*>(cur)) {
         comics->resetToRoot();
         return;
     }
@@ -1181,7 +1181,7 @@ void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target)
     // Comics is wired in Task 8; other pages (stream, books, videos,
     // tankorent) are handled in Tasks 9-10.
     if (target.pageId == QStringLiteral("comics")) {
-        if (auto* comics = m_pageStack->findChild<ComicsPage*>())
+        if (auto* comics = m_pageStack->findChild<MangaPage*>())
             comics->restoreLayer(target);
         return;
     }
@@ -1799,8 +1799,8 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         e["message"] = msg;
         return e;
     };
-    auto comicsPage = [this]() -> ComicsPage* {
-        return m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr;
+    auto comicsPage = [this]() -> MangaPage* {
+        return m_pageStack ? m_pageStack->findChild<MangaPage*>() : nullptr;
     };
 
     if (cmd == QLatin1String("ping")) {
@@ -2209,28 +2209,28 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_get_state")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         return reply({{"snapshot", comics->devSnapshot()}});
     }
 
     if (cmd == QLatin1String("comics_get_library")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         return reply(comics->devLibrarySnapshot());
     }
 
     if (cmd == QLatin1String("comics_get_series")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         return reply(comics->devSeriesSnapshot());
     }
 
     if (cmd == QLatin1String("comics_select_volume")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         if (!payload.contains(QStringLiteral("row")))
             return err("BAD_REQUEST", "payload.row required");
         return reply(comics->devSelectVolume(payload.value("row").toInt(-1)));
@@ -2239,7 +2239,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_open_series")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const QString seriesId = payload.value("seriesId").toString();
         if (seriesId.isEmpty())
             return err("BAD_REQUEST", "payload.seriesId required");
@@ -2250,7 +2250,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_open_chapter")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const QString seriesId = payload.value("seriesId").toString();
         const int volume = payload.value("volume").toInt();
         const int chapter = payload.value("chapter").toInt();
@@ -2263,7 +2263,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_search_tankoyomi")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const QString query = payload.value("query").toString();
         if (query.trimmed().isEmpty())
             return err("BAD_REQUEST", "payload.query required");
@@ -2274,14 +2274,14 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_get_downloads")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         return reply(comics->devDownloadsSnapshot());
     }
 
     if (cmd == QLatin1String("comics_dispatch_volume")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const QString seriesId = payload.value("seriesId").toString();
         const int volume = payload.value("volume").toInt();
         if (seriesId.isEmpty() || volume <= 0)
@@ -2294,7 +2294,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_get_sources")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         return reply(comics->devSourcesSnapshot());
     }
 
@@ -2302,7 +2302,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_open_western_series")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const QString seriesId = payload.value("seriesId").toString();
         if (seriesId.isEmpty())
             return err("BAD_REQUEST", "payload.seriesId required");
@@ -2313,7 +2313,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_download_western_edition")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const int volumeNumber = payload.value("volumeNumber").toInt();
         if (volumeNumber <= 0)
             return err("BAD_REQUEST", "payload.volumeNumber must be a positive integer");
@@ -2323,7 +2323,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     if (cmd == QLatin1String("comics_get_western_download_state")) {
         auto* comics = comicsPage();
         if (!comics)
-            return err("INTERNAL", "ComicsPage not initialized");
+            return err("INTERNAL", "MangaPage not initialized");
         const int volumeNumber = payload.value("volumeNumber").toInt(0);
         return reply(comics->devWesternDownloadState(volumeNumber));
     }
@@ -2333,7 +2333,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
         if (pageId == QLatin1String("comics")) {
             auto* comics = comicsPage();
             if (!comics)
-                return err("INTERNAL", "ComicsPage not initialized");
+                return err("INTERNAL", "MangaPage not initialized");
             return reply({{"pageId", pageId}, {"snapshot", comics->devSnapshot()}});
         }
         if (pageId == QLatin1String("stream")) {
@@ -2585,7 +2585,7 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
                    m_pageStack ? m_pageStack->findChild<BooksPage*>() : nullptr))
         return delegatedReply;
     if (tryForward(cmd.startsWith(QLatin1String("comics_")),
-                   m_pageStack ? m_pageStack->findChild<ComicsPage*>() : nullptr))
+                   m_pageStack ? m_pageStack->findChild<MangaPage*>() : nullptr))
         return delegatedReply;
     if (tryForward(cmd.startsWith(QLatin1String("videos_")), m_videosPage))
         return delegatedReply;

@@ -1,4 +1,4 @@
-#include "ComicsPage.h"
+#include "MangaPage.h"
 #include "TileStrip.h"
 #include "TileCard.h"
 #include "SeriesView.h"
@@ -168,7 +168,7 @@ QJsonObject mediaPreviewJson(const tankoban::manga::anilist::MediaPreview& p)
 
 static QString fandomSeriesSlugFromTitle(const QString& title);
 
-ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
+MangaPage::MangaPage(CoreBridge* bridge, QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
 {
@@ -186,7 +186,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // of folders already owned by a Tankoyomi record).
     m_tyLibrary = new ComicsTankoyomiLibrary(&m_bridge->store(), this);
     connect(m_tyLibrary, &ComicsTankoyomiLibrary::libraryChanged,
-            this, &ComicsPage::onTankoyomiLibraryChanged);
+            this, &MangaPage::onTankoyomiLibraryChanged);
 
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 18+20 -- shared NAM +
     // scraper registry. Scraper registry is retained because MangaDownloader
@@ -212,18 +212,18 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                             m_nam, this);
     connect(m_mangafireClient,
             &tankoban::manga::mangafire::MangaFireCatalogClient::catalogReady,
-            this, &ComicsPage::onMangaFireCatalogReady);
+            this, &MangaPage::onMangaFireCatalogReady);
     connect(m_mangafireClient,
             &tankoban::manga::mangafire::MangaFireCatalogClient::catalogFailed,
-            this, &ComicsPage::onMangaFireCatalogFailed);
+            this, &MangaPage::onMangaFireCatalogFailed);
     m_wcResolver = new tankoban::manga::mangafire::MangaWeebCentralResolver(
         m_nam, this);
     connect(m_wcResolver,
             &tankoban::manga::mangafire::MangaWeebCentralResolver::viable,
-            this, &ComicsPage::onWcResolverViable);
+            this, &MangaPage::onWcResolverViable);
     connect(m_wcResolver,
             &tankoban::manga::mangafire::MangaWeebCentralResolver::skip,
-            this, &ComicsPage::onWcResolverSkip);
+            this, &MangaPage::onWcResolverSkip);
     // NOTE: the seriesClassified -> ComicsSeriesView::onSeriesClassified wire
     // lives below, AFTER m_tyVolumeSeriesView is constructed (~line 384).
     // Connecting here (receiver still null) silently no-ops the connection,
@@ -235,10 +235,10 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         m_mangaUpdatesClient, m_anilistCache, this);
     connect(m_volumeResolver,
             &tankoban::manga::mangaupdates::VolumeMetadataResolver::resolved,
-            this, &ComicsPage::onVolumeMetadataResolved);
+            this, &MangaPage::onVolumeMetadataResolved);
     connect(m_volumeResolver,
             &tankoban::manga::mangaupdates::VolumeMetadataResolver::unresolved,
-            this, &ComicsPage::onVolumeMetadataUnresolved);
+            this, &MangaPage::onVolumeMetadataUnresolved);
     const QString trustJsonPath = QCoreApplication::applicationDirPath()
                                 + QStringLiteral("/resources/manga_uploader_trust.json");
     m_nyaaRuntime = new tankoban::manga::NyaaRuntimeSource(m_nam, trustJsonPath, this);
@@ -262,7 +262,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                 showLibraryMode();
             });
     connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::resultPicked,
-            this, &ComicsPage::onSearchResultActivated);
+            this, &MangaPage::onSearchResultActivated);
 
     // Scraper error toasts retained -- downloads in flight still route
     // through MangaDownloader for legacy chapter pulls. Stream-bar parity
@@ -306,7 +306,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
                 // truly malformed (no seriesId). Never leave the series-view
                 // "Loading" overlay up — bounce back to the Western grid so the
                 // user is not stranded (2026-06-02 hang fix).
-                qInfo("ComicsPage: westernSeriesReady -> empty/invalid series, returning to grid");
+                qInfo("MangaPage: westernSeriesReady -> empty/invalid series, returning to grid");
                 showWesternMode();
                 return;
             }
@@ -360,7 +360,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     connect(m_mangaDownloader, &MangaDownloader::downloadCompleted,
             this, [this](const QString&) { refreshTileChips(); });
     connect(m_mangaDownloader, &MangaDownloader::chapterCompleted,
-            this, &ComicsPage::onChapterCompleted);
+            this, &MangaPage::onChapterCompleted);
     // COMICS_WESTERN readallcomics-as-page-source (2026-06-03): a completed
     // readallcomics chapter that is the in-flight Western download flips the
     // Western tile to Read (via the proven provider path) + updates the Sources
@@ -473,10 +473,10 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // Phase 9: route the Sources-panel dispatch signal to the dispatch slot.
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::downloadDispatchRequested,
-            this, &ComicsPage::onDownloadDispatchRequested);
+            this, &MangaPage::onDownloadDispatchRequested);
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::openVolume,
-            this, &ComicsPage::onComicsSeriesOpenVolume);
+            this, &MangaPage::onComicsSeriesOpenVolume);
     // STREAM_PORT 2026-05-18 Bug-1 fix: wire the new in-view "<- Back" button
     // (added by Task 1) to the existing onDetailBack slot. The slot was
     // shipped 2026-05-16 with a comment ("the new ComicsSeriesView does not
@@ -486,7 +486,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // the same way.
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::backRequested,
-            this, &ComicsPage::onDetailBack);
+            this, &MangaPage::onDetailBack);
 
     // VOLUME_X_QUALITY 2026-05-28 (Agent 1). Route WeebCentral classification
     // verdicts into the series view for RAW-SCAN tags + the Volume X row. MUST
@@ -499,26 +499,26 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
 
     // Task 8 (WEEBCENTRAL_IDENTITY_PIVOT): wire MangaSourceRegistry into the
     // series view so showSeries(MangaResult) can dispatch fetchDetail() to the
-    // correct scraper. m_sourceRegistry is owned by ComicsPage (constructed above).
+    // correct scraper. m_sourceRegistry is owned by MangaPage (constructed above).
     m_tyVolumeSeriesView->setSourceRegistry(m_sourceRegistry);
 
     // COMICS_MANGAFIRE_PIVOT Phase B.2 (2026-05-23). Wire forceRefreshRequested
     // from the series view so the user can re-scan the local catalog.
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::forceRefreshRequested,
-            this, &ComicsPage::onForceRefreshRequested);
+            this, &MangaPage::onForceRefreshRequested);
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRequested,
-            this, &ComicsPage::onWcResolveRequested);
+            this, &MangaPage::onWcResolveRequested);
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::weebCentralResolveRangeRequested,
-            this, &ComicsPage::onWcResolveRangeRequested);
+            this, &MangaPage::onWcResolveRangeRequested);
     // COMICS_WC_LIBRARY_ENRICH 2026-05-24 (Agent 1). MangaFire-catalog-only
     // series (anilistId=0) can't bookmark via the AniList-keyed path. Wire
     // the best-effort search-by-title enrichment here.
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::addToLibraryByTitleRequested,
-            this, &ComicsPage::onAddToLibraryByTitleRequested);
+            this, &MangaPage::onAddToLibraryByTitleRequested);
     // COMICS_WESTERN_ADD 2026-06-01 (Agent 2). Add-to-shelf for a LIVE Western
     // series: persist the stashed raw JSON (m_pendingWesternJson, set by the
     // westernSeriesReady slot) verbatim to data/western_catalogue/<seriesId>.json,
@@ -532,7 +532,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         // per-user WesternLibrary store (NOT a baked catalogue json). The store
         // is the source of truth for My Library; issues fetch live on open.
         if (m_pendingWesternSeriesId.isEmpty() || !m_westernLibrary) {
-            qInfo("ComicsPage: addWesternToLibraryRequested with no pending series");
+            qInfo("MangaPage: addWesternToLibraryRequested with no pending series");
             return;
         }
         // Validate the remote-derived seriesId — it flows into a candidate
@@ -541,7 +541,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         const QString& id = m_pendingWesternSeriesId;
         static const QRegularExpression safeIdRe(QStringLiteral("^[a-z0-9][a-z0-9-]*$"));
         if (!safeIdRe.match(id).hasMatch()) {
-            qInfo("ComicsPage: unsafe Western seriesId '%s', refusing to add",
+            qInfo("MangaPage: unsafe Western seriesId '%s', refusing to add",
                   qUtf8Printable(id));
             return;
         }
@@ -559,7 +559,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     // explicit Add to Library click.
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::enrichSeriesByTitleRequested,
-            this, &ComicsPage::onEnrichSeriesByTitleRequested);
+            this, &MangaPage::onEnrichSeriesByTitleRequested);
     connect(m_tyVolumeSeriesView,
             &tankoban::manga::comics::ComicsSeriesView::detailResolvedForCatalog,
             this, [this](int anilistId, const QString& title) {
@@ -580,7 +580,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             return;
         }
 
-        qInfo("ComicsPage::detailResolvedForCatalog: retrying MangaFire resolve for \"%s\"",
+        qInfo("MangaPage::detailResolvedForCatalog: retrying MangaFire resolve for \"%s\"",
               qUtf8Printable(resolvedTitle));
         m_currentDetailSeriesTitle = resolvedTitle;
         dispatchCatalogResolve(fandomSeriesSlugFromTitle(resolvedTitle),
@@ -637,7 +637,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         // No match: re-enable the button (if Add-to-Library path) or just
         // leave the series view as-is (if auto-enrichment path).
         if (results.isEmpty() || results.first().anilistId <= 0) {
-            qInfo("ComicsPage::AniListEnrich: no AniList match for \"%s\" (addBookmark=%d)",
+            qInfo("MangaPage::AniListEnrich: no AniList match for \"%s\" (addBookmark=%d)",
                   qUtf8Printable(pendingTitle), addBookmark ? 1 : 0);
             if (searchOpenRequest) {
                 renderSearchOpenFallback(searchOpenFallback);
@@ -648,7 +648,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
         }
 
         const auto& preview = results.first();
-        qInfo("ComicsPage::AniListEnrich: matched \"%s\" -> anilistId=%d title=\"%s\" (addBookmark=%d)",
+        qInfo("MangaPage::AniListEnrich: matched \"%s\" -> anilistId=%d title=\"%s\" (addBookmark=%d)",
               qUtf8Printable(pendingTitle), preview.anilistId,
               qUtf8Printable(preview.title), addBookmark ? 1 : 0);
 
@@ -693,7 +693,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
             m_pendingSearchOpenEnrichReqId = 0;
             m_pendingSearchOpenFallback = MangaResult{};
         }
-        qWarning("ComicsPage::AniListEnrich: AniList search failed for \"%s\" (addBookmark=%d): %s",
+        qWarning("MangaPage::AniListEnrich: AniList search failed for \"%s\" (addBookmark=%d): %s",
                  qUtf8Printable(pendingTitle), addBookmark ? 1 : 0, qUtf8Printable(reason));
         if (searchOpenRequest) {
             renderSearchOpenFallback(searchOpenFallback);
@@ -712,9 +712,9 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     m_scanner->moveToThread(m_scanThread);
 
     connect(m_scanner, &LibraryScanner::seriesFound,
-            this, &ComicsPage::onSeriesFound, Qt::QueuedConnection);
+            this, &MangaPage::onSeriesFound, Qt::QueuedConnection);
     connect(m_scanner, &LibraryScanner::scanFinished,
-            this, &ComicsPage::onScanFinished, Qt::QueuedConnection);
+            this, &MangaPage::onScanFinished, Qt::QueuedConnection);
 
     // REPO_HYGIENE Phase 4 P4.2 (2026-04-26) — race-safe scanner ownership.
     connect(m_scanThread, &QThread::finished, m_scanner, &QObject::deleteLater);
@@ -754,7 +754,7 @@ ComicsPage::ComicsPage(CoreBridge* bridge, QWidget* parent)
     });
 }
 
-ComicsPage::~ComicsPage()
+MangaPage::~MangaPage()
 {
     m_scanThread->quit();
     m_scanThread->wait();
@@ -779,13 +779,13 @@ inline bool replyErrComics(QJsonObject& reply, const char* code, const QString& 
 }
 }  // namespace
 
-bool ComicsPage::dispatchDevCommand(const QString& cmd,
+bool MangaPage::dispatchDevCommand(const QString& cmd,
                                     const QJsonObject& payload,
                                     QJsonObject& reply)
 {
     // v1.6 Phase D.4 (2026-05-19) — library-side bridge. Existing comics_*
     // commands are dispatched directly from MainWindow's handleDevCommand
-    // (ComicsPage::dev* helpers), so this method only handles the cross-mode
+    // (MangaPage::dev* helpers), so this method only handles the cross-mode
     // library_* surface.
     if (!cmd.startsWith(QLatin1String("library_")))
         return false;
@@ -865,7 +865,7 @@ bool ComicsPage::dispatchDevCommand(const QString& cmd,
     return false;  // unknown library_*
 }
 
-QJsonObject ComicsPage::devLibrarySection() const
+QJsonObject MangaPage::devLibrarySection() const
 {
     QJsonObject sec;
     QJsonObject cr;
@@ -912,9 +912,9 @@ QJsonObject ComicsPage::devLibrarySection() const
     return sec;
 }
 
-void ComicsPage::setTorrentClient(TorrentClient* client)
+void MangaPage::setTorrentClient(TorrentClient* client)
 {
-    // TANKOYOMI_PREMIUM Phase 3 -- MainWindow wires this AFTER both ComicsPage
+    // TANKOYOMI_PREMIUM Phase 3 -- MainWindow wires this AFTER both MangaPage
     // and TorrentClient exist (MainWindow.cpp construction order: pages first,
     // then TorrentClient hoisted to MainWindow scope). Idempotent: a second
     // call with a different client is a no-op for now (no documented re-wire
@@ -1011,7 +1011,7 @@ void ComicsPage::setTorrentClient(TorrentClient* client)
 // COMICS_WESTERN_DOWNLOAD 2026-06-02 (Agent 1).
 // Wire the WesternVolumeDownloader signals and connect the series-view trigger.
 // Called once from setTorrentClient() after m_westernDownloader is non-null.
-void ComicsPage::wireWesternDownloader()
+void MangaPage::wireWesternDownloader()
 {
     Q_ASSERT(m_westernDownloader);
 
@@ -1026,7 +1026,7 @@ void ComicsPage::wireWesternDownloader()
         // runs through the readallcomics page->cbz path (startWesternIssueDownload),
         // NOT the parked GetComics resolver (m_westernDownloader, kept compiled).
         if (!m_readAllComicsScraper || m_pendingWesternSeriesId.isEmpty()) {
-            qInfo("ComicsPage: Western download ignored - no readallcomics scraper/series");
+            qInfo("MangaPage: Western download ignored - no readallcomics scraper/series");
             if (m_tyVolumeSeriesView)
                 m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
             return;
@@ -1059,7 +1059,7 @@ void ComicsPage::wireWesternDownloader()
 
         const QString destPath = QDir(comicsRoot).absoluteFilePath(safeTitle);
         if (!QDir().mkpath(destPath)) {
-            qInfo("ComicsPage: failed to mkpath Western dest %s", qUtf8Printable(destPath));
+            qInfo("MangaPage: failed to mkpath Western dest %s", qUtf8Printable(destPath));
             return;
         }
 
@@ -1082,7 +1082,7 @@ void ComicsPage::wireWesternDownloader()
         // GetComics resolver hints; unused on this path but kept in the signal.)
         Q_UNUSED(tierLabel);
 
-        qInfo("ComicsPage: Western issue download - series=%s edition=%s issue=%d dest=%s",
+        qInfo("MangaPage: Western issue download - series=%s edition=%s issue=%d dest=%s",
               qUtf8Printable(seriesId), qUtf8Printable(editionTitle),
               volumeNumber, qUtf8Printable(destPath));
 
@@ -1173,7 +1173,7 @@ void ComicsPage::wireWesternDownloader()
         // For now we log and accept that a follow-up can wire
         // loadCoverUrlForVolume as a public slot if desired.
         Q_UNUSED(volNumber);
-        qInfo("ComicsPage: coverReady for Western series=%s vol=%d url=%s",
+        qInfo("MangaPage: coverReady for Western series=%s vol=%d url=%s",
               qUtf8Printable(seriesId), volNumber, qUtf8Printable(coverUrl));
     }, Qt::QueuedConnection);
 }
@@ -1200,7 +1200,7 @@ static QString normalizeWesternTitle(const QString& raw)
 // a distinct object from the rco browse scraper, so connecting its signals here
 // does not disturb the catalog browse path; one-shot connections (disconnected
 // on the first terminal event) keep concurrent requests from cross-firing.
-void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double issueNumber,
+void MangaPage::startWesternIssueDownload(const QString& seriesTitle, double issueNumber,
                                            const QString& editionTitle, int volumeNumber,
                                            const QString& destPath)
 {
@@ -1226,7 +1226,7 @@ void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double is
         QObject::disconnect(*errConn);
     };
     auto fail = [this](const QString& why) {
-        qInfo("ComicsPage: Western readallcomics resolve failed — %s", qUtf8Printable(why));
+        qInfo("MangaPage: Western readallcomics resolve failed — %s", qUtf8Printable(why));
         if (m_tyVolumeSeriesView)
             m_tyVolumeSeriesView->updateWesternDownloadStatus(QString(), tr("No download found"));
     };
@@ -1301,7 +1301,7 @@ void ComicsPage::startWesternIssueDownload(const QString& seriesTitle, double is
 // are replaced. One-shot connections (disconnected on the first terminal event)
 // avoid cross-firing with concurrent requests; a series-id guard drops a late
 // result if the user navigated to a different series mid-fetch.
-void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog& seriesMeta,
+void MangaPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog& seriesMeta,
                                              bool onShelf)
 {
     if (!m_readAllComicsScraper || !m_tyVolumeSeriesView) return;
@@ -1319,7 +1319,7 @@ void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog
         QObject::disconnect(*errConn);
     };
     auto fail = [this, guardId](const QString& why) {
-        qInfo("ComicsPage: western issue-list fetch failed - %s", qUtf8Printable(why));
+        qInfo("MangaPage: western issue-list fetch failed - %s", qUtf8Printable(why));
         if (m_tyVolumeSeriesView && m_pendingWesternSeriesId == guardId) {
             // WESTERN_PARITY 2026-06-07 (Agent 1) — fetch done (failed): flip the
             // empty-state out of "Loading issues…" to "No issues found yet."
@@ -1386,7 +1386,7 @@ void ComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog
     scraper->search(seriesTitle, 60);
 }
 
-void ComicsPage::showEvent(QShowEvent* e)
+void MangaPage::showEvent(QShowEvent* e)
 {
     QWidget::showEvent(e);
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 30 — re-validate
@@ -1405,7 +1405,7 @@ void ComicsPage::showEvent(QShowEvent* e)
 //                             clicked dropdown row time to consume its
 //                             press/release before the dropdown vanishes
 // Mirrors StreamPage.cpp's eventFilter at :1873-1889.
-bool ComicsPage::eventFilter(QObject* obj, QEvent* event)
+bool MangaPage::eventFilter(QObject* obj, QEvent* event)
 {
     // Shared-recipe generalisation (2026-06-02): track which bar has focus so
     // positionSearchHistoryDropdown + setSearchBusy always target the right bar.
@@ -1425,7 +1425,7 @@ bool ComicsPage::eventFilter(QObject* obj, QEvent* event)
     return QWidget::eventFilter(obj, event);
 }
 
-void ComicsPage::buildUI()
+void MangaPage::buildUI()
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -1508,7 +1508,7 @@ void ComicsPage::buildUI()
 
     // F5: trigger rescan
     auto* f5Shortcut = new QShortcut(QKeySequence(Qt::Key_F5), this);
-    connect(f5Shortcut, &QShortcut::activated, this, &ComicsPage::triggerScan);
+    connect(f5Shortcut, &QShortcut::activated, this, &MangaPage::triggerScan);
 
     // ── 2. Continue Reading section ──
     m_continueSection = new QWidget(gridPage);
@@ -1627,7 +1627,7 @@ void ComicsPage::buildUI()
     m_viewToggle->setCursor(Qt::PointingHandCursor);
     // Styling lives in Theme.cpp QSS template under QPushButton#ViewToggle —
     // theme-bound (Light/Dark parity).
-    connect(m_viewToggle, &QPushButton::clicked, this, &ComicsPage::toggleViewMode);
+    connect(m_viewToggle, &QPushButton::clicked, this, &MangaPage::toggleViewMode);
     seriesLayout->addWidget(m_viewToggle);
 
     gridLayout->addWidget(seriesRow);
@@ -1719,8 +1719,8 @@ void ComicsPage::buildUI()
 
     // ── Series view (index 1) ──
     m_seriesView = new SeriesView(m_bridge);
-    connect(m_seriesView, &SeriesView::backRequested, this, &ComicsPage::showGrid);
-    connect(m_seriesView, &SeriesView::issueSelected, this, &ComicsPage::openComic);
+    connect(m_seriesView, &SeriesView::backRequested, this, &MangaPage::showGrid);
+    connect(m_seriesView, &SeriesView::issueSelected, this, &MangaPage::openComic);
     m_stack->addWidget(m_seriesView);
 
     // ── Manga / Western mode toggle (top chrome, COMICS_WESTERN_CATALOGUE
@@ -1749,8 +1749,8 @@ void ComicsPage::buildUI()
         m_westernTabBtn->setCursor(Qt::PointingHandCursor);
         m_westernTabBtn->setStyleSheet(pillQss);
 
-        connect(m_mangaTabBtn,   &QPushButton::clicked, this, &ComicsPage::showMangaMode);
-        connect(m_westernTabBtn, &QPushButton::clicked, this, &ComicsPage::showWesternMode);
+        connect(m_mangaTabBtn,   &QPushButton::clicked, this, &MangaPage::showMangaMode);
+        connect(m_westernTabBtn, &QPushButton::clicked, this, &MangaPage::showWesternMode);
 
         auto* modeRow = new QHBoxLayout();
         modeRow->setContentsMargins(20, 12, 20, 0);
@@ -1767,13 +1767,13 @@ void ComicsPage::buildUI()
     layout->addWidget(m_stack, 1);
 }
 
-void ComicsPage::activate()
+void MangaPage::activate()
 {
     if (!m_hasScanned)
         triggerScan();
 }
 
-void ComicsPage::triggerScan()
+void MangaPage::triggerScan()
 {
     // REPO_HYGIENE Phase 4 P4.3 (2026-04-26) — buffer rather than drop.
     if (m_scanning) {
@@ -1815,7 +1815,7 @@ void ComicsPage::triggerScan()
                               Q_ARG(QStringList, roots));
 }
 
-void ComicsPage::addSeriesTile(const SeriesInfo& series)
+void MangaPage::addSeriesTile(const SeriesInfo& series)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- pre-pivot tile
     // rendering (folder-origin + Tankoyomi-origin merged into m_tileStrip)
@@ -1846,7 +1846,7 @@ void ComicsPage::addSeriesTile(const SeriesInfo& series)
     }
 }
 
-void ComicsPage::onSeriesFound(const SeriesInfo& series)
+void MangaPage::onSeriesFound(const SeriesInfo& series)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- pre-pivot incremental
     // tile-render is gone. We still walk each discovered series to register
@@ -1857,7 +1857,7 @@ void ComicsPage::onSeriesFound(const SeriesInfo& series)
     addSeriesTile(series);  // progress-map population only -- no tile-strip mutation
 }
 
-void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
+void MangaPage::onScanFinished(const QList<SeriesInfo>& allSeries)
 {
     m_hasScanned = true;
     m_scanning = false;
@@ -1885,7 +1885,7 @@ void ComicsPage::onScanFinished(const QList<SeriesInfo>& allSeries)
     refreshContinueStrip();
 }
 
-void ComicsPage::onTankoyomiLibraryChanged()
+void MangaPage::onTankoyomiLibraryChanged()
 {
     // Push refreshed claim set to the scanner (queued — scanner runs on
     // worker thread). Doesn't trigger a rescan: the folder-origin slice
@@ -1903,7 +1903,7 @@ void ComicsPage::onTankoyomiLibraryChanged()
     refreshTileChips();
 }
 
-void ComicsPage::rebuildTiles()
+void MangaPage::rebuildTiles()
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- pre-pivot merge of
     // folder-origin + Tankoyomi-library tiles is GONE. Kept as a thin
@@ -1913,7 +1913,7 @@ void ComicsPage::rebuildTiles()
     refreshLibraryStrips();
 }
 
-void ComicsPage::refreshTileChips()
+void MangaPage::refreshTileChips()
 {
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 5 Task 34 — for each
     // tile with a seriesKey (set in addSeriesTile only on Tankoyomi-origin
@@ -1947,7 +1947,7 @@ void ComicsPage::refreshTileChips()
     }
 }
 
-SeriesInfo ComicsPage::seriesInfoFromRecord(const ComicsLibraryRecord& r)
+SeriesInfo MangaPage::seriesInfoFromRecord(const ComicsLibraryRecord& r)
 {
     // Tankoyomi-origin record → SeriesInfo projection. Shared between
     // onScanFinished (first-scan path) and rebuildTiles. Phase 3+ will
@@ -1962,7 +1962,7 @@ SeriesInfo ComicsPage::seriesInfoFromRecord(const ComicsLibraryRecord& r)
     return s;
 }
 
-QString ComicsPage::canonicalSeriesPathForPremium(
+QString MangaPage::canonicalSeriesPathForPremium(
     const tankoban::manga::premium::PremiumCatalogEntry& entry) const
 {
     // TANKOYOMI_PREMIUM Phase 7 Task 7.2 -- prefer an existing Tankoyomi
@@ -1992,7 +1992,7 @@ QString ComicsPage::canonicalSeriesPathForPremium(
     return root + QChar('/') + safe;
 }
 
-QString ComicsPage::normalizeTitleForMatch(const QString& title)
+QString MangaPage::normalizeTitleForMatch(const QString& title)
 {
     // TANKOYOMI_PREMIUM Phase 9 -- lowercase + strip whitespace + non-word
     // chars + underscores. Folds "Berserk", "Berserk!", " Berserk " into
@@ -2005,7 +2005,7 @@ QString ComicsPage::normalizeTitleForMatch(const QString& title)
     return s;
 }
 
-QString ComicsPage::findFolderImportedSeriesPathForTitle(const QString& title) const
+QString MangaPage::findFolderImportedSeriesPathForTitle(const QString& title) const
 {
     // TANKOYOMI_PREMIUM Phase 9 -- exactly-one-match contract. m_folderSeries
     // is folder-imported by construction (Tankoyomi-origin entries live in
@@ -2024,12 +2024,12 @@ QString ComicsPage::findFolderImportedSeriesPathForTitle(const QString& title) c
     return QString();
 }
 
-QString ComicsPage::pendingVolumeKey(const QString& seriesId, int volumeNumber)
+QString MangaPage::pendingVolumeKey(const QString& seriesId, int volumeNumber)
 {
     return seriesId + QLatin1Char('|') + QString::number(volumeNumber);
 }
 
-void ComicsPage::rememberPendingVolumeDispatch(const QString& seriesId,
+void MangaPage::rememberPendingVolumeDispatch(const QString& seriesId,
                                                int volumeNumber,
                                                PendingVolumeSourceKind kind,
                                                int anilistId,
@@ -2047,7 +2047,7 @@ void ComicsPage::rememberPendingVolumeDispatch(const QString& seriesId,
     }
 }
 
-void ComicsPage::ensureTankoyomiChapterInMap(const QString& cbzPath)
+void MangaPage::ensureTankoyomiChapterInMap(const QString& cbzPath)
 {
     // TANKOYOMI_CONTINUE_READING 2026-05-15 — bridge between today's
     // two-origin Continue-Reading model (folder-imported scanner walk +
@@ -2080,7 +2080,7 @@ void ComicsPage::ensureTankoyomiChapterInMap(const QString& cbzPath)
     m_progressKeyMap[progressKey] = {cbzPath, rec->canonicalSeriesPath, rec->coverPath};
 }
 
-ComicsPage::ContinueLabels ComicsPage::continueLabelsForRecord(
+MangaPage::ContinueLabels MangaPage::continueLabelsForRecord(
     const ComicsLibraryRecord& rec, const QString& cbzPath, int page, int pageCount)
 {
     // TANKOYOMI_CONTINUE_READING 2026-05-15 -- Title = series name (rec.title).
@@ -2131,7 +2131,7 @@ ComicsPage::ContinueLabels ComicsPage::continueLabelsForRecord(
     };
 }
 
-int ComicsPage::anilistIdForDownloadEntry(const QString& sourceId,
+int MangaPage::anilistIdForDownloadEntry(const QString& sourceId,
                                           const QString& seriesId) const
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- map a download-index
@@ -2175,7 +2175,7 @@ int ComicsPage::anilistIdForDownloadEntry(const QString& sourceId,
 // grouping key resolver. Maps (sourceId, seriesId) to a display-grouping
 // key so One Piece downloads from Premium + MangaFire merge into one card.
 // Priority: anilist:<id> > title:<normalized> > raw:<sourceId>:<seriesId>.
-QString ComicsPage::resolveCanonicalGroupKey(const QString& sourceId,
+QString MangaPage::resolveCanonicalGroupKey(const QString& sourceId,
                                               const QString& seriesId) const
 {
     // 1. Prefer resolved AniList id from the entry directly.
@@ -2212,7 +2212,7 @@ QString ComicsPage::resolveCanonicalGroupKey(const QString& sourceId,
 // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — title resolution.
 // Order: AniList cache → MangaFire local catalog → Premium catalog →
 // Tankoyomi library record → empty (caller humanizes slug).
-QString ComicsPage::resolveDisplayTitle(const QString& sourceId,
+QString MangaPage::resolveDisplayTitle(const QString& sourceId,
                                          const QString& seriesId) const
 {
     // 1. AniList cache resolution.
@@ -2265,7 +2265,7 @@ QString ComicsPage::resolveDisplayTitle(const QString& sourceId,
 
 // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — source label.
 // Static helper: maps sourceId to a human-readable display name.
-QString ComicsPage::resolveSourceLabel(const QString& sourceId)
+QString MangaPage::resolveSourceLabel(const QString& sourceId)
 {
     if (sourceId == QLatin1String("tankoyomi_premium"))
         return QStringLiteral("Premium");
@@ -2301,7 +2301,7 @@ QString ComicsPage::resolveSourceLabel(const QString& sourceId)
 // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — slug humanizer.
 // "one-piece" → "One Piece", "grand-blue-dreaming" → "Grand Blue Dreaming".
 // Returns empty for anilist_<N> slugs (callers must resolve via AniList first).
-QString ComicsPage::humanizeSlug(const QString& slug)
+QString MangaPage::humanizeSlug(const QString& slug)
 {
     if (slug.isEmpty())
         return {};
@@ -2330,7 +2330,7 @@ QString ComicsPage::humanizeSlug(const QString& slug)
 // (caller falls back to existing AniList → CBZ thumbnail → placeholder).
 // Looks up the series in m_localCatalogIndex by anilistId or displayTitle,
 // loads the catalog JSON, and returns Volume 1's coverUrlJapanese.
-QString ComicsPage::resolveCanonicalSeriesCover(int anilistId,
+QString MangaPage::resolveCanonicalSeriesCover(int anilistId,
                                                  const QString& displayTitle) const
 {
     // 1. Look up the catalog slug via anilistId or title.
@@ -2362,7 +2362,7 @@ QString ComicsPage::resolveCanonicalSeriesCover(int anilistId,
 
 // COMICS_CR_VOLUME_COVER 2026-05-29 (Agent 1) — see header. Returns the given
 // volume's catalog cover, else Volume 1's, else empty.
-QString ComicsPage::resolveReadVolumeCover(const QString& displayTitle,
+QString MangaPage::resolveReadVolumeCover(const QString& displayTitle,
                                            int volumeNumber) const
 {
     if (displayTitle.isEmpty() || volumeNumber <= 0)
@@ -2388,7 +2388,7 @@ QString ComicsPage::resolveReadVolumeCover(const QString& displayTitle,
     return vol1Cover;
 }
 
-void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
+void MangaPage::onProviderVolumeCompleted(const QString& seriesId,
                                            int volumeNumber,
                                            const QString& cbzPath,
                                            int fallbackSourceKind)
@@ -2482,12 +2482,12 @@ void ComicsPage::onProviderVolumeCompleted(const QString& seriesId,
     // appear in the library via the merged-download-tile path (Bug 1 fix).
     if (anilistId > 0 && m_anilistCache && !m_anilistCache->isBookmarked(anilistId)) {
         m_anilistCache->addBookmark(anilistId);
-        qInfo("ComicsPage::onProviderVolumeCompleted: auto-bookmarked anilistId=%d "
+        qInfo("MangaPage::onProviderVolumeCompleted: auto-bookmarked anilistId=%d "
               "(download-implies-library)", anilistId);
     }
 }
 
-void ComicsPage::onProviderVolumeFailed(const QString& seriesId,
+void MangaPage::onProviderVolumeFailed(const QString& seriesId,
                                         int volumeNumber,
                                         const QString& errorCode,
                                         const QString& errorMessage,
@@ -2534,7 +2534,7 @@ void ComicsPage::onProviderVolumeFailed(const QString& seriesId,
         << errorMessage;
 }
 
-void ComicsPage::onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPath)
+void MangaPage::onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPath)
 {
     Q_UNUSED(volumeNumber);
     if (cbzPath.isEmpty() || !QFileInfo(cbzPath).exists()) return;
@@ -2562,7 +2562,7 @@ void ComicsPage::onComicsSeriesOpenVolume(int volumeNumber, const QString& cbzPa
     emit openComic(cbzPath, cbzList, seriesName);
 }
 
-void ComicsPage::fetchPosterForTile(TileCard* card, int anilistId,
+void MangaPage::fetchPosterForTile(TileCard* card, int anilistId,
                                      const QString& coverUrl)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- async poster fetch.
@@ -2631,7 +2631,7 @@ void ComicsPage::fetchPosterForTile(TileCard* card, int anilistId,
 // end of this TU next to dispatchCatalogResolve + the slot implementations.
 static QString fandomSeriesSlugFromTitle(const QString& title);
 
-void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTitle)
+void MangaPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTitle)
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- DOWNLOADED + BOOKMARKED
     // tile click resolution. Prefer a fully populated MediaPreview from the
@@ -2682,7 +2682,7 @@ void ComicsPage::openSeriesByAnilistId(int anilistId, const QString& fallbackTit
     m_stack->setCurrentWidget(m_tyVolumeSeriesView);
 }
 
-void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
+void MangaPage::openSeriesByRecord(const ComicsLibraryRecord& record)
 {
     // WEEBCENTRAL_IDENTITY_PIVOT Task 11 (2026-05-19) -- library-tile click
     // for WeebCentral-keyed downloaded series. Reconstructs a MangaResult
@@ -2727,9 +2727,9 @@ void ComicsPage::openSeriesByRecord(const ComicsLibraryRecord& record)
 // Constructs the standard Comics search chrome (input + busy spinner + icon
 // button) that is reused by BOTH the manga shelf and the Western shelf.
 // All three live widget pointers are written to the out-params before return.
-// The returned QWidget* container is parented to this (ComicsPage) so it
+// The returned QWidget* container is parented to this (MangaPage) so it
 // auto-destructs with the page; each caller adds it to its own layout.
-QWidget* ComicsPage::buildSearchRow(QLineEdit*& outBar,
+QWidget* MangaPage::buildSearchRow(QLineEdit*& outBar,
                                     QWidget*&   outBusy,
                                     QPushButton*& outBtn,
                                     const QString& placeholder,
@@ -2809,7 +2809,7 @@ QWidget* ComicsPage::buildSearchRow(QLineEdit*& outBar,
 // renders its collected editions through the SAME ComicsSeriesView tile path
 // that manga uses — but render-only, guarded against the manga enrichment path.
 
-void ComicsPage::buildWesternScreen()
+void MangaPage::buildWesternScreen()
 {
     auto* scroll = new QScrollArea();
     scroll->setObjectName("WesternGridScroll");
@@ -2898,7 +2898,7 @@ void ComicsPage::buildWesternScreen()
 // WesternLibrary store (added-only), NOT the shipped catalogue dir. This is the
 // structural fix for "placeholder series I never added": the shipped 14 are no
 // longer treated as in-library. Empty -> "Search to find comics" label.
-void ComicsPage::refreshWesternLibrary()
+void MangaPage::refreshWesternLibrary()
 {
     if (!m_westernGrid) return;
     m_westernGrid->clear();
@@ -2933,7 +2933,7 @@ void ComicsPage::refreshWesternLibrary()
 // because pre-arc western downloads were never registered into it. Idempotent
 // (contains() skips already-added). Runs once in the ctor; each add fires
 // libraryChanged -> refreshWesternLibrary (a no-op while the grid isn't built).
-void ComicsPage::reconcileWesternLibraryFromDisk()
+void MangaPage::reconcileWesternLibraryFromDisk()
 {
     if (!m_westernLibrary || !m_bridge) return;
     const QStringList roots = m_bridge->rootFolders(QStringLiteral("comics"));
@@ -2985,7 +2985,7 @@ void ComicsPage::reconcileWesternLibraryFromDisk()
 // WESTERN_PARITY 2026-06-07 (Agent 1) — open a western series straight from a
 // stored library record (no baked json). Header renders from the record;
 // issues fetch live via openWesternSeriesFromCatalog -> fetchAndRenderWesternIssues.
-void ComicsPage::openWesternSeriesFromLibrary(const QString& seriesId)
+void MangaPage::openWesternSeriesFromLibrary(const QString& seriesId)
 {
     if (!m_westernLibrary || !m_tyVolumeSeriesView) return;
     const auto recOpt = m_westernLibrary->get(seriesId);
@@ -3005,7 +3005,7 @@ void ComicsPage::openWesternSeriesFromLibrary(const QString& seriesId)
 // right before it's read, so refreshWesternContinueStrip can resolve it. The
 // mirror of ensureTankoyomiChapterInMap, scoped to the western map. coverPath
 // carries the series cover URL (from the open series / library record).
-void ComicsPage::ensureWesternIssueInMap(const QString& cbzPath)
+void MangaPage::ensureWesternIssueInMap(const QString& cbzPath)
 {
     if (cbzPath.isEmpty()) return;
     // Only western issues belong in the western map (manga cbzs are "Volume N").
@@ -3024,7 +3024,7 @@ void ComicsPage::ensureWesternIssueInMap(const QString& cbzPath)
 // WESTERN_PARITY 2026-06-07 (Agent 1) — Western CONTINUE READING. Mirror of
 // refreshContinueStrip but INCLUDING only western issues (manga excludes them
 // via the same isWesternIssueCbz marker). Dedups per series, caps at 40.
-void ComicsPage::refreshWesternContinueStrip()
+void MangaPage::refreshWesternContinueStrip()
 {
     if (!m_westernContinueStrip) return;
     m_westernContinueStrip->clear();
@@ -3090,12 +3090,12 @@ void ComicsPage::refreshWesternContinueStrip()
     m_westernContinueSection->show();
 }
 
-void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
+void MangaPage::openWesternSeriesFromJson(const QString& jsonPath)
 {
     if (jsonPath.isEmpty() || !m_tyVolumeSeriesView) return;
     const auto catalog = tankoban::manga::WesternCatalogLoader::loadFromFile(jsonPath);
     if (!catalog.has_value()) {
-        qInfo("ComicsPage::openWesternSeriesFromJson: loadFromFile failed for %s",
+        qInfo("MangaPage::openWesternSeriesFromJson: loadFromFile failed for %s",
               qUtf8Printable(jsonPath));
         return;
     }
@@ -3103,7 +3103,7 @@ void ComicsPage::openWesternSeriesFromJson(const QString& jsonPath)
     openWesternSeriesFromCatalog(*catalog, jsonPath, /*onShelf*/true);
 }
 
-void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalog& catalog,
+void MangaPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalog& catalog,
                                               const QString& jsonPath,
                                               bool onShelf)
 {
@@ -3192,7 +3192,7 @@ void ComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::MangaCatalo
     fetchAndRenderWesternIssues(enriched, onShelf);
 }
 
-void ComicsPage::showMangaMode()
+void MangaPage::showMangaMode()
 {
     if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(true);
     if (m_westernTabBtn) m_westernTabBtn->setChecked(false);
@@ -3201,7 +3201,7 @@ void ComicsPage::showMangaMode()
     if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("weebcentral"));
 }
 
-void ComicsPage::showWesternMode()
+void MangaPage::showWesternMode()
 {
     if (m_mangaTabBtn)   m_mangaTabBtn->setChecked(false);
     if (m_westernTabBtn) m_westernTabBtn->setChecked(true);
@@ -3230,7 +3230,7 @@ void ComicsPage::showWesternMode()
     if (m_searchTakeover) m_searchTakeover->setActiveSourceId(QStringLiteral("readallcomics"));
 }
 
-void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
+void MangaPage::openSeriesForDownloadEntry(const QString& sourceId,
                                              const QString& seriesId,
                                              const QString& displayTitle)
 {
@@ -3245,7 +3245,7 @@ void ComicsPage::openSeriesForDownloadEntry(const QString& sourceId,
     openSeriesByRecord(rec);
 }
 
-void ComicsPage::refreshLibraryStrips()
+void MangaPage::refreshLibraryStrips()
 {
     // TANKOYOMI_VOLUME_PIVOT Phase 10 (2026-05-16) -- rebuild DOWNLOADED +
     // BOOKMARKED sections from MangaDownloadIndex + AniListCache.
@@ -3510,12 +3510,12 @@ void ComicsPage::refreshLibraryStrips()
     }
 }
 
-void ComicsPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
+void MangaPage::onTileClicked(const QString& seriesPath, const QString& seriesName)
 {
     openSeriesByPath(seriesPath, seriesName);
 }
 
-void ComicsPage::openSeriesByPath(const QString& seriesPath, const QString& seriesName,
+void MangaPage::openSeriesByPath(const QString& seriesPath, const QString& seriesName,
                                   const QString& coverPath)
 {
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Task 27 -- provenance route.
@@ -3546,7 +3546,7 @@ void ComicsPage::openSeriesByPath(const QString& seriesPath, const QString& seri
     m_stack->setCurrentIndexAnimated(1);
 }
 
-void ComicsPage::updateWesternMangaStatus(const QString& recordId)
+void MangaPage::updateWesternMangaStatus(const QString& recordId)
 {
     // Route a MangaDownloader progress tick for the in-flight Western (RCO)
     // download to the Sources panel + the clicked volume tile. No-op for any
@@ -3577,7 +3577,7 @@ void ComicsPage::updateWesternMangaStatus(const QString& recordId)
     }
 }
 
-void ComicsPage::onChapterCompleted(const QString& source, const QString& seriesTitle,
+void MangaPage::onChapterCompleted(const QString& source, const QString& seriesTitle,
                                     const QString& chapterId, const QString& finalPath,
                                     qint64 fileSize)
 {
@@ -3604,7 +3604,7 @@ void ComicsPage::onChapterCompleted(const QString& source, const QString& series
     }
 
     if (matches.size() != 1) {
-        qWarning() << "[ComicsPage] skipped MangaDownloadIndex registration"
+        qWarning() << "[MangaPage] skipped MangaDownloadIndex registration"
                    << "source" << source << "title" << seriesTitle
                    << "chapter" << chapterId << "matches" << matches.size();
         return;
@@ -3616,7 +3616,7 @@ void ComicsPage::onChapterCompleted(const QString& source, const QString& series
     refreshTileChips();
 }
 
-void ComicsPage::showGrid()
+void MangaPage::showGrid()
 {
     m_stack->setCurrentIndexAnimated(0);
 }
@@ -3627,7 +3627,7 @@ void ComicsPage::showGrid()
 // SearchResults flips to the takeover widget; onSearchResultActivated is
 // a Phase-3 qDebug stub awaiting Phase-4 detail wiring.
 
-void ComicsPage::resetToRoot()
+void MangaPage::resetToRoot()
 {
     // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — public forwarder
     // invoked by MainWindow::resetActivePageToRoot when the user clicks
@@ -3637,7 +3637,7 @@ void ComicsPage::resetToRoot()
     showLibraryMode();
 }
 
-void ComicsPage::showLibraryMode()
+void MangaPage::showLibraryMode()
 {
     // Landing on the manga library clears any stale Western-detail flag (e.g.
     // user opened a Western series then tapped the Manga pill instead of Back),
@@ -3667,21 +3667,21 @@ void ComicsPage::showLibraryMode()
 // Per-shelf history routing (2026-06-02). The active list/key follow which bar
 // has focus: the Western bar uses a separate QSettings key so its history never
 // mixes with the manga shelf's (Hemanth smoke: the two were sharing one store).
-QStringList& ComicsPage::activeSearchHistory()
+QStringList& MangaPage::activeSearchHistory()
 {
     return (m_activeSearchBar && m_activeSearchBar == m_westernSearchBar)
                ? m_westernSearchHistory
                : m_searchHistory;
 }
 
-QString ComicsPage::activeSearchHistoryKey() const
+QString MangaPage::activeSearchHistoryKey() const
 {
     return (m_activeSearchBar && m_activeSearchBar == m_westernSearchBar)
                ? QStringLiteral("comics/westernSearchHistory")
                : QStringLiteral("comics/searchHistory");
 }
 
-void ComicsPage::loadSearchHistory()
+void MangaPage::loadSearchHistory()
 {
     QSettings s;
     m_searchHistory = s.value(QStringLiteral("comics/searchHistory")).toStringList();
@@ -3693,13 +3693,13 @@ void ComicsPage::loadSearchHistory()
         m_westernSearchHistory = m_westernSearchHistory.mid(0, kMaxSearchHistory);
 }
 
-void ComicsPage::saveSearchHistory()
+void MangaPage::saveSearchHistory()
 {
     QSettings s;
     s.setValue(activeSearchHistoryKey(), activeSearchHistory());
 }
 
-void ComicsPage::pushSearchHistory(const QString& query)
+void MangaPage::pushSearchHistory(const QString& query)
 {
     const QString q = query.trimmed();
     if (q.isEmpty()) return;
@@ -3711,7 +3711,7 @@ void ComicsPage::pushSearchHistory(const QString& query)
     saveSearchHistory();
 }
 
-void ComicsPage::removeSearchHistoryEntry(const QString& query)
+void MangaPage::removeSearchHistoryEntry(const QString& query)
 {
     activeSearchHistory().removeAll(query);
     saveSearchHistory();
@@ -3721,7 +3721,7 @@ void ComicsPage::removeSearchHistoryEntry(const QString& query)
     }
 }
 
-void ComicsPage::clearSearchHistory()
+void MangaPage::clearSearchHistory()
 {
     QStringList& hist = activeSearchHistory();
     if (hist.isEmpty()) return;
@@ -3730,7 +3730,7 @@ void ComicsPage::clearSearchHistory()
     hideSearchHistoryDropdown();
 }
 
-void ComicsPage::setSearchBusy(bool busy)
+void MangaPage::setSearchBusy(bool busy)
 {
     // Shared-recipe: toggle the busy widget for whichever bar is active.
     QWidget* busyWidget = m_activeSearchBusy ? m_activeSearchBusy : m_searchBusy;
@@ -3738,7 +3738,7 @@ void ComicsPage::setSearchBusy(bool busy)
     busyWidget->setVisible(busy);
 }
 
-void ComicsPage::buildSearchHistoryDropdown()
+void MangaPage::buildSearchHistoryDropdown()
 {
     m_searchHistoryDropdown = new QFrame(this);
     m_searchHistoryDropdown->setObjectName("ComicsSearchHistory");
@@ -3768,7 +3768,7 @@ void ComicsPage::buildSearchHistoryDropdown()
     });
 }
 
-void ComicsPage::positionSearchHistoryDropdown()
+void MangaPage::positionSearchHistoryDropdown()
 {
     if (!m_searchHistoryDropdown) return;
     // Shared-recipe: anchor to the bar that currently has focus (or manga bar).
@@ -3781,7 +3781,7 @@ void ComicsPage::positionSearchHistoryDropdown()
         m_searchHistoryDropdown->sizeHint().height());
 }
 
-void ComicsPage::showSearchHistoryDropdown()
+void MangaPage::showSearchHistoryDropdown()
 {
     if (!m_searchHistoryDropdown || !m_searchHistoryList) return;
     if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
@@ -3866,7 +3866,7 @@ void ComicsPage::showSearchHistoryDropdown()
     clearAllBtn->setStyleSheet(kClearAllBtnStyle);
     clearAllBtn->setFocusPolicy(Qt::NoFocus);
     connect(clearAllBtn, &QPushButton::clicked,
-            this, &ComicsPage::clearSearchHistory);
+            this, &MangaPage::clearSearchHistory);
     layout->addWidget(clearAllBtn);
 
     m_searchHistoryDropdown->adjustSize();
@@ -3875,13 +3875,13 @@ void ComicsPage::showSearchHistoryDropdown()
     m_searchHistoryDropdown->raise();
 }
 
-void ComicsPage::hideSearchHistoryDropdown()
+void MangaPage::hideSearchHistoryDropdown()
 {
     if (m_searchHistoryHideTimer) m_searchHistoryHideTimer->stop();
     if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
 }
 
-void ComicsPage::showSearchMode(const QString& query)
+void MangaPage::showSearchMode(const QString& query)
 {
     // Stream-bar parity 2026-05-22: this is the canonical submit funnel —
     // Enter, search-icon click, AND history-row click all route through
@@ -3906,7 +3906,7 @@ void ComicsPage::showSearchMode(const QString& query)
     m_stack->setCurrentWidget(m_searchTakeover);
 }
 
-void ComicsPage::onSearchResultActivated(const MangaResult& result)
+void MangaPage::onSearchResultActivated(const MangaResult& result)
 {
     comicsOpenTrace(QStringLiteral("CP::onSearchResultActivated ENTRY source=%1 id=%2 title=\"%3\"")
                         .arg(result.source).arg(result.id).arg(result.title));
@@ -3999,13 +3999,13 @@ void ComicsPage::onSearchResultActivated(const MangaResult& result)
         m_pendingLibraryEnrichAddBookmark = false;
         m_pendingSearchOpenEnrichReqId = reqId;
         m_pendingSearchOpenFallback = result;
-        qInfo("ComicsPage::onSearchResultActivated: pre-resolving AniList for \"%s\" reqId=%d",
+        qInfo("MangaPage::onSearchResultActivated: pre-resolving AniList for \"%s\" reqId=%d",
               qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
         m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
     }
 }
 
-void ComicsPage::renderSearchOpenFallback(const MangaResult& result)
+void MangaPage::renderSearchOpenFallback(const MangaResult& result)
 {
     if (!m_tyVolumeSeriesView) return;
     m_currentDetailAnilistId = 0;
@@ -4015,7 +4015,7 @@ void ComicsPage::renderSearchOpenFallback(const MangaResult& result)
                            /*titleHint*/result.title);
 }
 
-void ComicsPage::onDetailBack()
+void MangaPage::onDetailBack()
 {
     // COMICS_TANKOYOMI_STREAM_MERGER 2026-05-14 Phase 9 Task 52 -- Back
     // from detail routes by the origin recorded at entry. Search->Detail->
@@ -4024,7 +4024,7 @@ void ComicsPage::onDetailBack()
     //
     // TANKOYOMI_VOLUME_PIVOT Phase 9 (2026-05-16) -- this slot is the
     // central exit point for "back from detail" and is invoked by:
-    //   * the Escape shortcut (ComicsPage.cpp:533)
+    //   * the Escape shortcut (MangaPage.cpp:533)
     //   * STREAM_PORT Bug-1 fix 2026-05-18: ComicsSeriesView::backRequested
     //     signal (the in-view "<- Back" button shipped by Task 1)
     //   * future deep-link recovery paths
@@ -4054,7 +4054,7 @@ void ComicsPage::onDetailBack()
     m_detailEnteredFromWestern = false;
 }
 
-void ComicsPage::onVolumeMetadataResolved(int anilistId, int volumeCount, int chapterCount)
+void MangaPage::onVolumeMetadataResolved(int anilistId, int volumeCount, int chapterCount)
 {
     if (!m_anilistCache || !m_tyVolumeSeriesView) return;
     if (m_tyVolumeSeriesView->currentAnilistId() != anilistId) return;
@@ -4067,14 +4067,14 @@ void ComicsPage::onVolumeMetadataResolved(int anilistId, int volumeCount, int ch
     m_tyVolumeSeriesView->setVolumeRows(rows);
 }
 
-void ComicsPage::onVolumeMetadataUnresolved(int anilistId, const QString& reason)
+void MangaPage::onVolumeMetadataUnresolved(int anilistId, const QString& reason)
 {
     qDebug().noquote() << QStringLiteral("[mangaupdates] anilist %1 unresolved: %2")
                               .arg(anilistId)
                               .arg(reason);
 }
 
-void ComicsPage::onDownloadDispatchRequested(
+void MangaPage::onDownloadDispatchRequested(
     const tankoban::manga::comics::UnifiedSourceRow& row,
     const QString& seriesTitle,
     int            anilistSeriesId,
@@ -4270,7 +4270,7 @@ void ComicsPage::onDownloadDispatchRequested(
     }
 }
 
-void ComicsPage::toggleViewMode()
+void MangaPage::toggleViewMode()
 {
     m_gridMode = !m_gridMode;
     QSettings("Tankoban", "Tankoban").setValue("library_view_mode_comics",
@@ -4288,7 +4288,7 @@ void ComicsPage::toggleViewMode()
     }
 }
 
-void ComicsPage::applySearch()
+void MangaPage::applySearch()
 {
     QString query = m_searchBar->text();
     m_tileStrip->filterTiles(query);
@@ -4307,7 +4307,7 @@ void ComicsPage::applySearch()
     }
 }
 
-void ComicsPage::refreshContinueStrip()
+void MangaPage::refreshContinueStrip()
 {
     // WESTERN_PARITY 2026-06-07 (Agent 1) — keep the Western CR strip in sync
     // whenever the manga one refreshes (notably on reader-close from MainWindow).
@@ -4551,7 +4551,7 @@ void ComicsPage::refreshContinueStrip()
     m_continueSection->show();
 }
 
-void ComicsPage::onCardClicked()
+void MangaPage::onCardClicked()
 {
     auto* card = qobject_cast<TileCard*>(sender());
     if (!card) return;
@@ -4560,7 +4560,7 @@ void ComicsPage::onCardClicked()
                      card->property("coverPath").toString());
 }
 
-void ComicsPage::onTileContextMenu(const QPoint& pos)
+void MangaPage::onTileContextMenu(const QPoint& pos)
 {
     auto* card = m_tileStrip->tileAt(pos);
     if (!card) return;
@@ -4804,7 +4804,7 @@ menu_done:
     menu->deleteLater();
 }
 
-void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, const QPoint& globalPos)
+void MangaPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, const QPoint& globalPos)
 {
     int count = selected.size();
     if (count < 2) return;
@@ -4856,7 +4856,7 @@ void ComicsPage::onMultiSelectContextMenu(const QList<TileCard*>& selected, cons
 // replays the layer state using the same private helpers as restoreNavState
 // (which remains alive until Task 12). The QScopedValueRollback on
 // m_inNavRestore suppresses re-emission on every code path below.
-void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
+void MangaPage::restoreLayer(const tankoban::ui::LayerEntry& target)
 {
     QScopedValueRollback<bool> rollback(m_inNavRestore, true);
     const QString kind     = target.kind;
@@ -4986,7 +4986,7 @@ void ComicsPage::restoreLayer(const tankoban::ui::LayerEntry& target)
 // dev-control bridge
 // -----------------------------------------------------------------------
 
-QJsonObject ComicsPage::devSnapshot() const
+QJsonObject MangaPage::devSnapshot() const
 {
     QJsonObject snap;
     QString layer = QStringLiteral("library");
@@ -5018,7 +5018,7 @@ QJsonObject ComicsPage::devSnapshot() const
     return snap;
 }
 
-QJsonObject ComicsPage::devLibrarySnapshot() const
+QJsonObject MangaPage::devLibrarySnapshot() const
 {
     QJsonObject out;
     QJsonArray entries;
@@ -5069,7 +5069,7 @@ QJsonObject ComicsPage::devLibrarySnapshot() const
     return out;
 }
 
-QJsonObject ComicsPage::devSeriesSnapshot() const
+QJsonObject MangaPage::devSeriesSnapshot() const
 {
     if (!m_tyVolumeSeriesView ||
         m_stack->currentWidget() != m_tyVolumeSeriesView ||
@@ -5079,7 +5079,7 @@ QJsonObject ComicsPage::devSeriesSnapshot() const
     return QJsonObject{{QStringLiteral("series"), m_tyVolumeSeriesView->devSnapshot()}};
 }
 
-QJsonObject ComicsPage::devSelectVolume(int row)
+QJsonObject MangaPage::devSelectVolume(int row)
 {
     if (!m_tyVolumeSeriesView ||
         m_stack->currentWidget() != m_tyVolumeSeriesView ||
@@ -5090,7 +5090,7 @@ QJsonObject ComicsPage::devSelectVolume(int row)
     return m_tyVolumeSeriesView->devSelectVolume(row);
 }
 
-QJsonObject ComicsPage::devOpenSeries(const QString& seriesId)
+QJsonObject MangaPage::devOpenSeries(const QString& seriesId)
 {
     const int anilistId = parseAnilistSeriesId(seriesId);
     if (anilistId <= 0) {
@@ -5110,7 +5110,7 @@ QJsonObject ComicsPage::devOpenSeries(const QString& seriesId)
                        {QStringLiteral("snapshot"), devSnapshot()}};
 }
 
-QJsonObject ComicsPage::devOpenChapter(const QString& seriesId,
+QJsonObject MangaPage::devOpenChapter(const QString& seriesId,
                                        int volumeNumber,
                                        int chapterNumber)
 {
@@ -5154,7 +5154,7 @@ QJsonObject ComicsPage::devOpenChapter(const QString& seriesId,
                        {QStringLiteral("path"), entry->canonicalPath}};
 }
 
-QJsonObject ComicsPage::devSearchTankoyomi(const QString& query, int timeoutMs)
+QJsonObject MangaPage::devSearchTankoyomi(const QString& query, int timeoutMs)
 {
     QJsonObject out;
     if (!m_anilistClient || query.trimmed().isEmpty()) {
@@ -5210,7 +5210,7 @@ QJsonObject ComicsPage::devSearchTankoyomi(const QString& query, int timeoutMs)
     return out;
 }
 
-QJsonObject ComicsPage::devDownloadsSnapshot() const
+QJsonObject MangaPage::devDownloadsSnapshot() const
 {
     QJsonObject out;
     QJsonArray indexed;
@@ -5263,7 +5263,7 @@ QJsonObject ComicsPage::devDownloadsSnapshot() const
     return out;
 }
 
-QJsonObject ComicsPage::devDispatchVolume(const QString& seriesId,
+QJsonObject MangaPage::devDispatchVolume(const QString& seriesId,
                                           int volumeNumber,
                                           const QString& source)
 {
@@ -5284,7 +5284,7 @@ QJsonObject ComicsPage::devDispatchVolume(const QString& seriesId,
     return m_tyVolumeSeriesView->devDispatchVolume(volumeNumber, source);
 }
 
-QJsonObject ComicsPage::devSourcesSnapshot() const
+QJsonObject MangaPage::devSourcesSnapshot() const
 {
     if (!m_tyVolumeSeriesView)
         return QJsonObject{{QStringLiteral("sources"), QJsonValue::Null}};
@@ -5297,7 +5297,7 @@ QJsonObject ComicsPage::devSourcesSnapshot() const
 // trigger an edition download, and poll volume state without touching the UI.
 // -----------------------------------------------------------------------
 
-QJsonObject ComicsPage::devOpenWesternSeries(const QString& seriesId)
+QJsonObject MangaPage::devOpenWesternSeries(const QString& seriesId)
 {
     if (seriesId.trimmed().isEmpty()) {
         return QJsonObject{{QStringLiteral("ok"), false},
@@ -5322,7 +5322,7 @@ QJsonObject ComicsPage::devOpenWesternSeries(const QString& seriesId)
                        {QStringLiteral("editionCount"), editionCount}};
 }
 
-QJsonObject ComicsPage::devDownloadWesternEdition(int volumeNumber)
+QJsonObject MangaPage::devDownloadWesternEdition(int volumeNumber)
 {
     if (m_pendingWesternSeriesId.isEmpty()) {
         return QJsonObject{{QStringLiteral("ok"),    false},
@@ -5361,7 +5361,7 @@ QJsonObject ComicsPage::devDownloadWesternEdition(int volumeNumber)
                             QStringLiteral("edition %1 not found in current series").arg(volumeNumber)}};
     }
     // populateSourcesForVolume on an rco catalog emits downloadWesternEditionRequested,
-    // which the ComicsPage lambda routes to m_westernDownloader->requestVolume — the
+    // which the MangaPage lambda routes to m_westernDownloader->requestVolume — the
     // real download path. This mirrors the user clicking a volume row.
     m_tyVolumeSeriesView->populateSourcesForVolume(volumeNumber);
     return QJsonObject{{QStringLiteral("ok"),           true},
@@ -5369,7 +5369,7 @@ QJsonObject ComicsPage::devDownloadWesternEdition(int volumeNumber)
                        {QStringLiteral("volumeNumber"), volumeNumber}};
 }
 
-QJsonObject ComicsPage::devWesternDownloadState(int volumeNumber) const
+QJsonObject MangaPage::devWesternDownloadState(int volumeNumber) const
 {
     // devSeriesSnapshot guards on m_mode == TankoyomiDetail; openWesternSeriesFromCatalog
     // sets that mode, so this works for an open Western series.
@@ -5456,18 +5456,18 @@ static QString fandomSeriesSlugFromTitle(const QString& title)
 }
 
 // Hook to trace dispatch entry — body unchanged otherwise.
-void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
+void MangaPage::dispatchCatalogResolve(const QString& seriesId,
                                         const QString& titleHint)
 {
     if (seriesId.isEmpty()) {
-        qInfo("ComicsPage::dispatchCatalogResolve: empty seriesId — skipping");
+        qInfo("MangaPage::dispatchCatalogResolve: empty seriesId — skipping");
         return;
     }
     comicsOpenTrace(QStringLiteral("CP::dispatchCatalogResolve ENTRY seriesId=%1 titleHint=\"%2\"")
                         .arg(seriesId).arg(titleHint));
     m_pendingCatalogSeriesId   = seriesId;
     m_pendingCatalogTitleHint  = titleHint;
-    qInfo("ComicsPage::dispatchCatalogResolve: seriesId=%s titleHint=%s",
+    qInfo("MangaPage::dispatchCatalogResolve: seriesId=%s titleHint=%s",
           qUtf8Printable(seriesId),
           qUtf8Printable(titleHint));
 
@@ -5496,7 +5496,7 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
         const QString path = m_localCatalogIndex.filePathForSlug(slug);
         const auto local = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
         if (local.has_value()) {
-            qInfo("ComicsPage::dispatchCatalogResolve: catalog hit (%s -> slug=%s)",
+            qInfo("MangaPage::dispatchCatalogResolve: catalog hit (%s -> slug=%s)",
                   qUtf8Printable(matchedBy), qUtf8Printable(slug));
             m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*local);
             // VOLUME_X_QUALITY 2026-05-28 (Agent 1, DeepSeek V4-Pro).
@@ -5506,10 +5506,10 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
             if (m_wcResolver) m_wcResolver->classifySeries(*local);
             return;
         }
-        qInfo("ComicsPage::dispatchCatalogResolve: slug=%s matched but loadFromFile failed",
+        qInfo("MangaPage::dispatchCatalogResolve: slug=%s matched but loadFromFile failed",
               qUtf8Printable(slug));
     } else {
-        qInfo("ComicsPage::dispatchCatalogResolve: no local catalog entry for seriesId=%s titleHint=%s",
+        qInfo("MangaPage::dispatchCatalogResolve: no local catalog entry for seriesId=%s titleHint=%s",
               qUtf8Printable(seriesId), qUtf8Printable(titleHint));
     }
 
@@ -5520,7 +5520,7 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
     // First-click latency: ~3–4s while the three HTTP calls fly. Every
     // subsequent open of the same series is instant.
     if (m_mangafireClient && !titleHint.isEmpty()) {
-        qInfo("ComicsPage::dispatchCatalogResolve: firing on-demand MangaFire fetch for \"%s\"",
+        qInfo("MangaPage::dispatchCatalogResolve: firing on-demand MangaFire fetch for \"%s\"",
               qUtf8Printable(titleHint));
         m_mangafireClient->fetchByTitle(titleHint);
     }
@@ -5528,13 +5528,13 @@ void ComicsPage::dispatchCatalogResolve(const QString& seriesId,
 
 // COMICS_MANGAFIRE_ON_DEMAND_FETCH 2026-05-23 (Agent 1).
 // Hook for trace at MangaFire on-demand fetch arrival.
-void ComicsPage::onMangaFireCatalogReady(
+void MangaPage::onMangaFireCatalogReady(
     const tankoban::manga::MangaCatalog& catalog, const QString& writtenPath)
 {
     comicsOpenTrace(QStringLiteral("CP::onMangaFireCatalogReady ENTRY slug=%1 volumes=%2")
                         .arg(catalog.seriesId)
                         .arg(catalog.volumes.size()));
-    qInfo("ComicsPage::onMangaFireCatalogReady: wrote %s (%lld volumes)",
+    qInfo("MangaPage::onMangaFireCatalogReady: wrote %s (%lld volumes)",
           qUtf8Printable(writtenPath),
           static_cast<long long>(catalog.volumes.size()));
 
@@ -5544,7 +5544,7 @@ void ComicsPage::onMangaFireCatalogReady(
     // Stale-guard: if the user has already navigated away (different series in
     // flight, or back to library), don't clobber whatever they're now looking at.
     if (m_pendingCatalogSeriesId.isEmpty()) {
-        qInfo("ComicsPage::onMangaFireCatalogReady: no pending dispatch — fetched but skipping render");
+        qInfo("MangaPage::onMangaFireCatalogReady: no pending dispatch — fetched but skipping render");
         return;
     }
 
@@ -5555,7 +5555,7 @@ void ComicsPage::onMangaFireCatalogReady(
     if (!m_tyVolumeSeriesView) return;
     const auto loaded = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(writtenPath);
     if (!loaded.has_value()) {
-        qWarning("ComicsPage::onMangaFireCatalogReady: just-written JSON failed to reload");
+        qWarning("MangaPage::onMangaFireCatalogReady: just-written JSON failed to reload");
         return;
     }
     m_tyVolumeSeriesView->populateVolumeRowsFromCatalog(*loaded);
@@ -5563,17 +5563,17 @@ void ComicsPage::onMangaFireCatalogReady(
     if (m_wcResolver) m_wcResolver->classifySeries(*loaded);
 }
 
-void ComicsPage::onMangaFireCatalogFailed(const QString& title,
+void MangaPage::onMangaFireCatalogFailed(const QString& title,
                                            const QString& reason)
 {
-    qWarning("ComicsPage::onMangaFireCatalogFailed: title=\"%s\" reason=%s",
+    qWarning("MangaPage::onMangaFireCatalogFailed: title=\"%s\" reason=%s",
              qUtf8Printable(title), qUtf8Printable(reason));
     // No UI surfacing — the series view already shows WeebCentral/AniList
     // content + a hero cover. The catalog rows just stay empty for series
     // MangaFire doesn't host (extremely rare given the 53K-series corpus).
 }
 
-void ComicsPage::onWcResolveRequested(const QString& mangaFireSeriesId,
+void MangaPage::onWcResolveRequested(const QString& mangaFireSeriesId,
                                       int volumeNumber)
 {
     if (!m_wcResolver || volumeNumber <= 0) {
@@ -5585,21 +5585,21 @@ void ComicsPage::onWcResolveRequested(const QString& mangaFireSeriesId,
         seriesId = m_localCatalogIndex.slugForSeriesTitle(m_currentDetailSeriesTitle);
     }
     if (seriesId.isEmpty()) {
-        qInfo("ComicsPage::onWcResolveRequested: no MangaFire seriesId for volume %d",
+        qInfo("MangaPage::onWcResolveRequested: no MangaFire seriesId for volume %d",
               volumeNumber);
         return;
     }
 
     const QString path = m_localCatalogIndex.filePathForSlug(seriesId);
     if (path.isEmpty()) {
-        qInfo("ComicsPage::onWcResolveRequested: no catalog path for slug=%s volume=%d",
+        qInfo("MangaPage::onWcResolveRequested: no catalog path for slug=%s volume=%d",
               qUtf8Printable(seriesId), volumeNumber);
         return;
     }
 
     const auto catalog = tankoban::manga::LocalMangaCatalogLoader::loadFromFile(path);
     if (!catalog.has_value() || !catalog->isValid()) {
-        qWarning("ComicsPage::onWcResolveRequested: failed to load catalog %s",
+        qWarning("MangaPage::onWcResolveRequested: failed to load catalog %s",
                  qUtf8Printable(path));
         return;
     }
@@ -5613,7 +5613,7 @@ void ComicsPage::onWcResolveRequested(const QString& mangaFireSeriesId,
     m_wcResolver->resolve(*catalog, volumeNumber, key);
 }
 
-void ComicsPage::onWcResolveRangeRequested(const QString& mangaFireSeriesId,
+void MangaPage::onWcResolveRangeRequested(const QString& mangaFireSeriesId,
                                            int volumeNumber,
                                            int rangeStart,
                                            int rangeEnd)
@@ -5650,12 +5650,12 @@ void ComicsPage::onWcResolveRangeRequested(const QString& mangaFireSeriesId,
                                       rangeStart, rangeEnd, key);
 }
 
-void ComicsPage::onWcResolverViable(
+void MangaPage::onWcResolverViable(
     tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
     QStringList chapterIds)
 {
     if (!(key == m_currentWcResolveKey)) {
-        qInfo("ComicsPage::onWcResolverViable: dropped stale result slug=%s volume=%d serial=%llu",
+        qInfo("MangaPage::onWcResolverViable: dropped stale result slug=%s volume=%d serial=%llu",
               qUtf8Printable(key.seriesId),
               key.volumeNumber,
               static_cast<unsigned long long>(key.requestSerial));
@@ -5667,19 +5667,19 @@ void ComicsPage::onWcResolverViable(
     m_tyVolumeSeriesView->onWeebCentralViable(key.volumeNumber, chapterIds);
 }
 
-void ComicsPage::onWcResolverSkip(
+void MangaPage::onWcResolverSkip(
     tankoban::manga::mangafire::MangaWeebCentralResolver::ResolveKey key,
     QString reasonCode)
 {
     if (!(key == m_currentWcResolveKey)) {
-        qInfo("ComicsPage::onWcResolverSkip: dropped stale result slug=%s volume=%d serial=%llu reason=%s",
+        qInfo("MangaPage::onWcResolverSkip: dropped stale result slug=%s volume=%d serial=%llu reason=%s",
               qUtf8Printable(key.seriesId),
               key.volumeNumber,
               static_cast<unsigned long long>(key.requestSerial),
               qUtf8Printable(reasonCode));
         return;
     }
-    qInfo("ComicsPage::onWcResolverSkip: slug=%s volume=%d reason=%s",
+    qInfo("MangaPage::onWcResolverSkip: slug=%s volume=%d reason=%s",
           qUtf8Printable(key.seriesId),
           key.volumeNumber,
           qUtf8Printable(reasonCode));
@@ -5691,7 +5691,7 @@ void ComicsPage::onWcResolverSkip(
 // — on match they seed the cache + re-show the series; addBookmark=true
 // ALSO commits a bookmark (Add-to-Library path); addBookmark=false leaves
 // the library untouched (auto-enrichment on series-open path).
-void ComicsPage::onAddToLibraryByTitleRequested(const QString& title)
+void MangaPage::onAddToLibraryByTitleRequested(const QString& title)
 {
     if (!m_anilistClient || !m_anilistCache || title.trimmed().isEmpty()) {
         if (m_tyVolumeSeriesView) m_tyVolumeSeriesView->refreshLibraryButton();
@@ -5701,7 +5701,7 @@ void ComicsPage::onAddToLibraryByTitleRequested(const QString& title)
     m_pendingLibraryEnrichReqId = reqId;
     m_pendingLibraryEnrichTitle = title.trimmed();
     m_pendingLibraryEnrichAddBookmark = true;
-    qInfo("ComicsPage::onAddToLibraryByTitleRequested: searching AniList for \"%s\" reqId=%d (with bookmark)",
+    qInfo("MangaPage::onAddToLibraryByTitleRequested: searching AniList for \"%s\" reqId=%d (with bookmark)",
           qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
     m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
 }
@@ -5713,12 +5713,12 @@ void ComicsPage::onAddToLibraryByTitleRequested(const QString& title)
 // hero block paints. Coalesces against any already-pending request: if a
 // search is already in flight for any title, this is a no-op (the prior
 // request's result will land and trigger the re-show).
-void ComicsPage::onEnrichSeriesByTitleRequested(const QString& title)
+void MangaPage::onEnrichSeriesByTitleRequested(const QString& title)
 {
     comicsOpenTrace(QStringLiteral("CP::onEnrichSeriesByTitleRequested ENTRY title=\"%1\"").arg(title));
     if (!m_anilistClient || !m_anilistCache || title.trimmed().isEmpty()) return;
     if (m_pendingLibraryEnrichReqId != 0) {
-        qInfo("ComicsPage::onEnrichSeriesByTitleRequested: skipping \"%s\" (request %d already in flight)",
+        qInfo("MangaPage::onEnrichSeriesByTitleRequested: skipping \"%s\" (request %d already in flight)",
               qUtf8Printable(title), m_pendingLibraryEnrichReqId);
         return;
     }
@@ -5726,20 +5726,20 @@ void ComicsPage::onEnrichSeriesByTitleRequested(const QString& title)
     m_pendingLibraryEnrichReqId = reqId;
     m_pendingLibraryEnrichTitle = title.trimmed();
     m_pendingLibraryEnrichAddBookmark = false;
-    qInfo("ComicsPage::onEnrichSeriesByTitleRequested: searching AniList for \"%s\" reqId=%d (enrich-only)",
+    qInfo("MangaPage::onEnrichSeriesByTitleRequested: searching AniList for \"%s\" reqId=%d (enrich-only)",
           qUtf8Printable(m_pendingLibraryEnrichTitle), reqId);
     m_anilistClient->searchByTitle(m_pendingLibraryEnrichTitle, reqId);
 }
 
-void ComicsPage::onForceRefreshRequested()
+void MangaPage::onForceRefreshRequested()
 {
     if (m_pendingCatalogSeriesId.isEmpty()) {
-        qInfo("ComicsPage::onForceRefreshRequested: no series in flight — skip");
+        qInfo("MangaPage::onForceRefreshRequested: no series in flight — skip");
         return;
     }
     // Re-scan the index (picks up any newly-dropped JSON) then re-resolve.
     m_localCatalogIndex.refresh();
-    qInfo("ComicsPage::onForceRefreshRequested: re-resolving %s",
+    qInfo("MangaPage::onForceRefreshRequested: re-resolving %s",
           qUtf8Printable(m_pendingCatalogSeriesId));
     dispatchCatalogResolve(m_pendingCatalogSeriesId, m_currentDetailSeriesTitle);
 }

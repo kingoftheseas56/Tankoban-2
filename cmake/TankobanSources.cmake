@@ -35,7 +35,7 @@ set(SOURCES
     src/ui/widgets/Toast.cpp
     src/ui/widgets/ThemePicker.cpp
     src/ui/widgets/ComicsSeriesViewLoadingOverlay.cpp
-    src/ui/pages/ComicsPage.cpp
+    src/ui/pages/MangaPage.cpp
     src/ui/pages/BooksPage.cpp
     src/ui/pages/VideosPage.cpp
     src/ui/pages/OrganisePage.cpp
@@ -284,7 +284,7 @@ set(HEADERS
     src/ui/widgets/LibraryListView.h
     src/ui/widgets/SidebarDrawer.h
     src/ui/widgets/Toast.h
-    src/ui/pages/ComicsPage.h
+    src/ui/pages/MangaPage.h
     src/ui/pages/BooksPage.h
     src/ui/pages/VideosPage.h
     src/ui/pages/OrganisePage.h

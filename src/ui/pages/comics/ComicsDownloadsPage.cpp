@@ -30,7 +30,7 @@
 #include <map>
 
 // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9)
-#include "../ComicsPage.h"
+#include "../MangaPage.h"
 
 namespace {
 
@@ -197,7 +197,7 @@ void ComicsDownloadsPage::setMangaDownloadIndex(MangaDownloadIndex* index)
     refresh();
 }
 
-void ComicsDownloadsPage::setComicsPage(ComicsPage* page)
+void ComicsDownloadsPage::setMangaPage(MangaPage* page)
 {
     m_comicsPage = page;
     // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) —
@@ -372,7 +372,7 @@ void ComicsDownloadsPage::refresh()
                     card.displayTitle = m_comicsPage->resolveDisplayTitle(srcId, serId);
                     if (card.displayTitle.isEmpty()) {
                         // Fallback: humanize the seriesId slug.
-                        card.displayTitle = ComicsPage::humanizeSlug(serId);
+                        card.displayTitle = MangaPage::humanizeSlug(serId);
                     }
                     if (card.displayTitle.isEmpty()) {
                         // Final fallback: use seriesId itself.

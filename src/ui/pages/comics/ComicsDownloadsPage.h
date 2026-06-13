@@ -21,7 +21,7 @@ class QVBoxLayout;
 class QWidget;
 class QNetworkAccessManager;
 class MangaDownloadIndex;
-class ComicsPage;
+class MangaPage;
 
 class ComicsDownloadsPage : public QFrame
 {
@@ -36,7 +36,7 @@ public:
     // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — non-owning
     // reference for canonical grouping + title resolution + source labels.
     // Set by MainWindow after construction.
-    void setComicsPage(ComicsPage* page);
+    void setMangaPage(MangaPage* page);
 
 signals:
     // Topbar back-button click - MainWindow's slot returns to Comics mode.
@@ -49,12 +49,12 @@ private:
     void buildUi();
     void updateEmptyState();
     // Series cover (110x150, manga 2:3 native per feedback_bigger_manga_covers).
-    // coverUrl resolved via ComicsPage::resolveCanonicalSeriesCover; loaded with
+    // coverUrl resolved via MangaPage::resolveCanonicalSeriesCover; loaded with
     // the ComicsSeriesView QPixmapCache-by-URL pattern. Empty -> title placeholder.
     QWidget* makeCoverWidget(const QString& coverUrl, const QString& title);
 
     MangaDownloadIndex* m_mangaDownloadIndex = nullptr;
-    ComicsPage*         m_comicsPage         = nullptr;
+    MangaPage*         m_comicsPage         = nullptr;
     QNetworkAccessManager* m_coverNam        = nullptr;
 
     QPushButton*  m_backBtn       = nullptr;
