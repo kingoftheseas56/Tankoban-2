@@ -40,6 +40,22 @@ QString MangaDownloadIndex::computeSeriesKey(const QString& sourceId,
     return sourceId + QStringLiteral(":") + seriesId;
 }
 
+QString MangaDownloadIndex::originForSource(const QString& sourceId)
+{
+    // Six-mode restructure Arc 1 (2026-06-07). Western scrapers are the only
+    // closed set; everything else (and unknown) defaults to manga so a new
+    // Asian source never silently disappears from both modes. startsWith is
+    // prefix-tolerant; "readallcomics" is NOT swallowed by "readcomics"
+    // (they diverge at index 4, 'a' vs 'c').
+    const QString s = sourceId.toLower();
+    if (s.startsWith(QStringLiteral("getcomics"))
+        || s.startsWith(QStringLiteral("readcomics"))
+        || s.startsWith(QStringLiteral("readallcomics"))) {
+        return QStringLiteral("western");
+    }
+    return QStringLiteral("manga");
+}
+
 // ── ctor + load/save ────────────────────────────────────────────────────────
 
 MangaDownloadIndex::MangaDownloadIndex(JsonStore* store, QObject* parent)
@@ -595,6 +611,21 @@ QList<MangaDownloadIndex::Entry> MangaDownloadIndex::entriesForAllSeries() const
                 seen.insert(seriesKey);
                 break;
             }
+        }
+    }
+    return out;
+}
+
+QList<MangaDownloadIndex::Entry> MangaDownloadIndex::entriesForOrigin(const QString& origin) const
+{
+    // Filter the per-series representatives by owning mode. entriesForAllSeries()
+    // takes m_mutex itself, so we must NOT hold it here (QMutex is non-recursive);
+    // originForSource is a pure static, so the filter needs no lock.
+    const QString want = origin.toLower();
+    QList<Entry> out;
+    for (const Entry& e : entriesForAllSeries()) {
+        if (originForSource(e.sourceId) == want) {
+            out.append(e);
         }
     }
     return out;

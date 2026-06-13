@@ -116,11 +116,28 @@ public:
     // routes through anilistId-keyed ComicsSeriesView, not the cbz file.
     QList<Entry> entriesForAllSeries() const;
 
+    // Six-mode restructure Arc 1 (2026-06-07) — one Entry per distinct
+    // (sourceId, seriesId) pair whose sourceId classifies into `origin`
+    // ("manga" | "western", per originForSource). The Manga mode renders the
+    // "manga" partition, the Western Comics mode the "western" partition, so
+    // the single shared download index surfaces only same-mode downloads in
+    // each. Thin filter over entriesForAllSeries() — locks internally, so this
+    // takes NO lock itself (originForSource is a pure static).
+    QList<Entry> entriesForOrigin(const QString& origin) const;
+
     // Static helpers.
     static QString computeCanonicalKey(const QString& anyPath);
     static QString computeChapterKey(const QString& sourceId, const QString& seriesId,
                                       const QString& chapterId);
     static QString computeSeriesKey(const QString& sourceId, const QString& seriesId);
+
+    // Six-mode restructure Arc 1 (2026-06-07): classify a download's sourceId
+    // into the owning comics mode. Western = getcomics/readcomics/readallcomics
+    // (prefix-tolerant: "getcomics_v2", "readallcomics_issue", ... all match);
+    // everything else (anilist/mangaupdates/mangafire/weebcentral/
+    // tankoyomi_premium and any unknown) is Asian "manga". Case-insensitive.
+    // Returns the lowercase literal "manga" or "western".
+    static QString originForSource(const QString& sourceId);
 
 signals:
     void entriesChanged();

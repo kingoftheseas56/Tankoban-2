@@ -126,6 +126,7 @@ if(TANKOBAN_BUILD_TESTS)
         src/ui/pages/comics/VolumeTile.cpp
         src/core/manga/MangaDownloadIndex.cpp
         tests/core/manga/test_manga_download_index.cpp
+        tests/core/manga/test_manga_download_index_origin.cpp
         tests/core/manga/WeebCentralPairedParseTest.cpp
         src/core/manga/WesternSeriesParse.cpp
         tests/core/manga/WesternSeriesParseTest.cpp
