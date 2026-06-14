@@ -909,7 +909,19 @@ void WesternComicsPage::openWesternSeriesFromCatalog(const tankoban::manga::Mang
 void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::MangaCatalog& seriesMeta,
                                                     bool onShelf)
 {
-    if (!m_readAllComicsScraper || !m_seriesView) return;
+    // SIX_MODE_RESTRUCTURE Arc 1 smoke fix (2026-06-14, Agent 1) — DECISIVE trace
+    // at entry so the next re-smoke shows exactly whether this path runs and
+    // whether the page's RCO scraper is live (the prime "empty series view"
+    // suspect was an unwired scraper; this proves it either way).
+    comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues ENTRY id=%1 title=\"%2\" scraper=%3 seriesView=%4")
+                        .arg(seriesMeta.seriesId)
+                        .arg(seriesMeta.seriesTitle)
+                        .arg(m_readAllComicsScraper ? 1 : 0)
+                        .arg(m_seriesView ? 1 : 0));
+    if (!m_readAllComicsScraper || !m_seriesView) {
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues EARLY-RETURN (null scraper/seriesView)"));
+        return;
+    }
 
     const QString seriesTitle = seriesMeta.seriesTitle;
     const QString guardId     = seriesMeta.seriesId;
@@ -924,6 +936,8 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
         QObject::disconnect(*errConn);
     };
     auto fail = [this, guardId](const QString& why) {
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FAIL id=%1 why=%2")
+                            .arg(guardId).arg(why));
         qInfo("WesternComicsPage: western issue-list fetch failed - %s", qUtf8Printable(why));
         if (m_seriesView && m_pendingWesternSeriesId == guardId) {
             m_seriesView->setWesternIssuesLoading(false);
@@ -932,11 +946,62 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
         }
     };
 
+    // Render the resolved issue list into the page's own series view (shared by
+    // the slug fast-path below and the search-then-fetch fallback).
+    auto renderIssues = [this, seriesMeta, guardId, onShelf](const QList<ChapterInfo>& chapters) {
+        if (m_pendingWesternSeriesId != guardId) return;   // navigated away
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues chaptersReady id=%1 count=%2")
+                            .arg(guardId).arg(chapters.size()));
+        if (chapters.isEmpty()) return;   // caller's fail() handles empties
+
+        QList<ChapterInfo> sorted = chapters;
+        std::sort(sorted.begin(), sorted.end(),
+            [](const ChapterInfo& a, const ChapterInfo& b) {
+                return a.chapterNumber < b.chapterNumber;
+            });
+        tankoban::manga::MangaCatalog issueCat = seriesMeta;
+        issueCat.volumes.clear();
+        issueCat.volumes.reserve(sorted.size());
+        for (const auto& ch : sorted) {
+            tankoban::manga::MangaVolume vol;
+            vol.volumeNumber     = qRound(ch.chapterNumber);
+            vol.groupingLabel    = QStringLiteral("Issue");
+            vol.coverUrlJapanese = seriesMeta.seriesCover;
+            issueCat.volumes.append(std::move(vol));
+        }
+        if (m_seriesView) {
+            m_seriesView->populateVolumeRowsFromCatalog(issueCat);
+            m_seriesView->setWesternOnShelf(onShelf);
+        }
+    };
+
     *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
         [cleanup, fail](const QString& msg) { cleanup(); fail(msg); });
 
+    // SIX_MODE_RESTRUCTURE Arc 1 smoke fix (2026-06-14, Agent 1) — SLUG FAST-PATH.
+    // A live readallcomics search pick already carries the EXACT series slug in
+    // result.id (== seriesMeta.seriesId here), and the baked-catalogue ids are the
+    // same slugs. fetchChapters() accepts a bare slug, so when we already have one
+    // we skip the redundant title re-search (a second ~1.5s network hop AND a
+    // title-rematch that could land on a sibling slug — e.g. "Saga" vs "Saga of
+    // the Swamp Thing"). This halves the "Loading issues…" window the smoke read
+    // as an empty series view, and fetches exactly the series the user clicked.
+    // Fallback (no usable slug) keeps the faithful search-then-fetch path.
+    static const QRegularExpression kSlugRe(QStringLiteral("^[a-z0-9][a-z0-9-]*$"));
+    if (!guardId.isEmpty() && kSlugRe.match(guardId).hasMatch()) {
+        *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
+            [cleanup, fail, renderIssues](const QList<ChapterInfo>& chapters) {
+                cleanup();
+                if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
+                renderIssues(chapters);
+            });
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FASTPATH fetchChapters slug=%1").arg(guardId));
+        scraper->fetchChapters(guardId);
+        return;
+    }
+
     *searchConn = connect(scraper, &MangaScraper::searchFinished, this,
-        [this, scraper, chapConn, cleanup, fail, seriesMeta, guardId, onShelf]
+        [this, scraper, chapConn, cleanup, fail, renderIssues, seriesMeta, guardId]
         (const QList<MangaResult>& results) {
             if (m_pendingWesternSeriesId != guardId) { cleanup(); return; }
             if (results.isEmpty()) { cleanup(); fail(QStringLiteral("no series match")); return; }
@@ -952,31 +1017,10 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
             }
 
             *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
-                [this, cleanup, fail, seriesMeta, guardId, onShelf]
-                (const QList<ChapterInfo>& chapters) {
+                [cleanup, fail, renderIssues](const QList<ChapterInfo>& chapters) {
                     cleanup();
-                    if (m_pendingWesternSeriesId != guardId) return;
                     if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
-
-                    QList<ChapterInfo> sorted = chapters;
-                    std::sort(sorted.begin(), sorted.end(),
-                        [](const ChapterInfo& a, const ChapterInfo& b) {
-                            return a.chapterNumber < b.chapterNumber;
-                        });
-                    tankoban::manga::MangaCatalog issueCat = seriesMeta;
-                    issueCat.volumes.clear();
-                    issueCat.volumes.reserve(sorted.size());
-                    for (const auto& ch : sorted) {
-                        tankoban::manga::MangaVolume vol;
-                        vol.volumeNumber     = qRound(ch.chapterNumber);
-                        vol.groupingLabel    = QStringLiteral("Issue");
-                        vol.coverUrlJapanese = seriesMeta.seriesCover;
-                        issueCat.volumes.append(std::move(vol));
-                    }
-                    if (m_seriesView) {
-                        m_seriesView->populateVolumeRowsFromCatalog(issueCat);
-                        m_seriesView->setWesternOnShelf(onShelf);
-                    }
+                    renderIssues(chapters);
                 });
             scraper->fetchChapters(slug);
         });
