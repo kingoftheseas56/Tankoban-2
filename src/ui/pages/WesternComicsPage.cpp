@@ -936,13 +936,16 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
         QObject::disconnect(*errConn);
     };
     auto fail = [this, guardId](const QString& why) {
-        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FAIL id=%1 why=%2")
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues EMPTY-STATE id=%1 why=%2")
                             .arg(guardId).arg(why));
         qInfo("WesternComicsPage: western issue-list fetch failed - %s", qUtf8Printable(why));
         if (m_seriesView && m_pendingWesternSeriesId == guardId) {
+            // setWesternIssuesLoading(false) flips the in-view empty label out of
+            // "Loading issues…" to "No issues found yet." — a COMMUNICATED empty
+            // state, never a silent blank loading screen (PROBLEM B).
             m_seriesView->setWesternIssuesLoading(false);
             m_seriesView->updateWesternDownloadStatus(
-                QString(), tr("No issues found on readallcomics"));
+                QString(), tr("No readable issues found for this title on ReadAllComics."));
         }
     };
 
@@ -975,24 +978,80 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
         }
     };
 
-    *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
-        [cleanup, fail](const QString& msg) { cleanup(); fail(msg); });
+    // SIX_MODE_RESTRUCTURE Arc 1 smoke fix #2 (2026-06-14, Agent 1) — SEARCH-THEN-
+    // FETCH FALLBACK. This is the path the ORIGINAL MangaPage always used: search
+    // the TITLE, pick the best title-matching result, and fetchChapters() the
+    // result's REAL readallcomics slug (e.g. "invincible-image-comics"), NOT a
+    // slug derived from the curated/baked seriesId. It is the recovery for the
+    // slug fast-path below: a curated id (e.g. "invincible") only coincidentally
+    // equals the readallcomics category slug, so category/<curated-id>/ 404s for
+    // some titles (Invincible). The title-match guard prevents landing on a wrong
+    // sibling slug (e.g. "Saga" vs "Saga of the Swamp Thing"). Terminal on its own
+    // failure (shows the COMMUNICATED empty state).
+    auto runSearchFallback = [this, scraper, searchConn, chapConn, errConn,
+                              cleanup, fail, renderIssues, seriesMeta, seriesTitle, guardId]() {
+        if (m_pendingWesternSeriesId != guardId) { cleanup(); return; }   // navigated away
+        comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FALLBACK search title=\"%1\"")
+                            .arg(seriesTitle));
+        // Re-arm error handling for the fallback's two hops (terminal now).
+        *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
+            [cleanup, fail](const QString& msg) { cleanup(); fail(msg); });
+        *searchConn = connect(scraper, &MangaScraper::searchFinished, this,
+            [this, scraper, chapConn, cleanup, fail, renderIssues, seriesMeta, guardId]
+            (const QList<MangaResult>& results) {
+                if (m_pendingWesternSeriesId != guardId) { cleanup(); return; }
+                if (results.isEmpty()) { cleanup(); fail(QStringLiteral("no series match")); return; }
+
+                const QString want = normalizeWesternTitle(seriesMeta.seriesTitle);
+                QString slug = results.first().id;
+                int bestScore = -1;
+                for (const auto& r : results) {
+                    const QString got = normalizeWesternTitle(r.title);
+                    const int score = (got == want) ? 2
+                                    : (got.startsWith(want) || want.startsWith(got)) ? 1 : 0;
+                    if (score > bestScore) { bestScore = score; slug = r.id; }
+                }
+                comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FALLBACK fetchChapters slug=%1").arg(slug));
+
+                *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
+                    [cleanup, fail, renderIssues](const QList<ChapterInfo>& chapters) {
+                        cleanup();
+                        if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
+                        renderIssues(chapters);
+                    });
+                scraper->fetchChapters(slug);
+            });
+        scraper->search(seriesTitle, 60);
+    };
 
     // SIX_MODE_RESTRUCTURE Arc 1 smoke fix (2026-06-14, Agent 1) — SLUG FAST-PATH.
     // A live readallcomics search pick already carries the EXACT series slug in
-    // result.id (== seriesMeta.seriesId here), and the baked-catalogue ids are the
-    // same slugs. fetchChapters() accepts a bare slug, so when we already have one
-    // we skip the redundant title re-search (a second ~1.5s network hop AND a
-    // title-rematch that could land on a sibling slug — e.g. "Saga" vs "Saga of
-    // the Swamp Thing"). This halves the "Loading issues…" window the smoke read
-    // as an empty series view, and fetches exactly the series the user clicked.
-    // Fallback (no usable slug) keeps the faithful search-then-fetch path.
+    // result.id (== seriesMeta.seriesId here), so fetchChapters() can skip the
+    // redundant title re-search (a second ~1.5s network hop). When the id is NOT a
+    // real readallcomics slug (curated/baked opens such as Invincible, whose
+    // category/<id>/ 404s), the fast-path's error/empty handlers FALL BACK to the
+    // search-then-fetch path above rather than dead-ending — so a recoverable title
+    // still loads. Saga/Walking-Dead keep the fast path (their slug resolves).
     static const QRegularExpression kSlugRe(QStringLiteral("^[a-z0-9][a-z0-9-]*$"));
     if (!guardId.isEmpty() && kSlugRe.match(guardId).hasMatch()) {
-        *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
-            [cleanup, fail, renderIssues](const QList<ChapterInfo>& chapters) {
+        // Fast-path error -> fall back to search-then-fetch (e.g. category/<slug>/
+        // 404). cleanup() first so the fallback re-arms cleanly.
+        *errConn = connect(scraper, &MangaScraper::errorOccurred, this,
+            [this, guardId, cleanup, runSearchFallback](const QString& msg) {
                 cleanup();
-                if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
+                comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FASTPATH-FAIL id=%1 err=%2 -> fallback")
+                                    .arg(guardId).arg(msg));
+                runSearchFallback();
+            });
+        *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
+            [this, guardId, cleanup, renderIssues, runSearchFallback](const QList<ChapterInfo>& chapters) {
+                cleanup();
+                if (chapters.isEmpty()) {
+                    comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FASTPATH-EMPTY id=%1 -> fallback")
+                                        .arg(guardId));
+                    runSearchFallback();
+                    return;
+                }
                 renderIssues(chapters);
             });
         comicsOpenTrace(QStringLiteral("WCP::fetchAndRenderWesternIssues FASTPATH fetchChapters slug=%1").arg(guardId));
@@ -1000,32 +1059,8 @@ void WesternComicsPage::fetchAndRenderWesternIssues(const tankoban::manga::Manga
         return;
     }
 
-    *searchConn = connect(scraper, &MangaScraper::searchFinished, this,
-        [this, scraper, chapConn, cleanup, fail, renderIssues, seriesMeta, guardId]
-        (const QList<MangaResult>& results) {
-            if (m_pendingWesternSeriesId != guardId) { cleanup(); return; }
-            if (results.isEmpty()) { cleanup(); fail(QStringLiteral("no series match")); return; }
-
-            const QString want = normalizeWesternTitle(seriesMeta.seriesTitle);
-            QString slug = results.first().id;
-            int bestScore = -1;
-            for (const auto& r : results) {
-                const QString got = normalizeWesternTitle(r.title);
-                const int score = (got == want) ? 2
-                                : (got.startsWith(want) || want.startsWith(got)) ? 1 : 0;
-                if (score > bestScore) { bestScore = score; slug = r.id; }
-            }
-
-            *chapConn = connect(scraper, &MangaScraper::chaptersReady, this,
-                [cleanup, fail, renderIssues](const QList<ChapterInfo>& chapters) {
-                    cleanup();
-                    if (chapters.isEmpty()) { fail(QStringLiteral("no issues listed")); return; }
-                    renderIssues(chapters);
-                });
-            scraper->fetchChapters(slug);
-        });
-
-    scraper->search(seriesTitle, 60);
+    // No usable slug — go straight to the faithful search-then-fetch path.
+    runSearchFallback();
 }
 
 // ---------------------------------------------------------------------------
