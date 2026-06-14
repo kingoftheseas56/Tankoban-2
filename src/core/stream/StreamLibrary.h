@@ -30,7 +30,7 @@ class StreamLibrary : public QObject
     Q_OBJECT
 
 public:
-    explicit StreamLibrary(JsonStore* store, QObject* parent = nullptr);
+    explicit StreamLibrary(JsonStore* store, const QString& filename, QObject* parent = nullptr);
 
     void add(const StreamLibraryEntry& entry);
     bool remove(const QString& imdbId);
@@ -74,10 +74,14 @@ private:
     // without TorrentClient/libtorrent). load()/save() call it directly.
 
     JsonStore* m_store;
+    // SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07), Task 4 — per-mode persistence
+    // key. Each video mode (anime/tv/movies) gets its OWN StreamLibrary on a
+    // distinct json file (chosen by the caller at construction, Task 9) so the
+    // modes don't collide on a single shared store. No default on the ctor
+    // param: every instantiation must name its file.
+    const QString m_filename;
     mutable QMutex m_mutex;
     QHash<QString, StreamLibraryEntry> m_entries;
     StreamDownloadIndex* m_downloadIndex = nullptr;
     TorrentClient* m_torrentClient = nullptr;
-
-    static constexpr const char* FILENAME = "stream_library.json";
 };

@@ -8,9 +8,10 @@
 #include <QDateTime>
 #include <QJsonObject>
 
-StreamLibrary::StreamLibrary(JsonStore* store, QObject* parent)
+StreamLibrary::StreamLibrary(JsonStore* store, const QString& filename, QObject* parent)
     : QObject(parent)
     , m_store(store)
+    , m_filename(filename)
 {
     load();
 }
@@ -148,7 +149,7 @@ QList<StreamLibraryEntry> StreamLibrary::getAll() const
 
 void StreamLibrary::load()
 {
-    QJsonObject root = m_store->read(FILENAME);
+    QJsonObject root = m_store->read(m_filename);
     QMutexLocker lock(&m_mutex);
     m_entries.clear();
 
@@ -171,5 +172,5 @@ void StreamLibrary::save()
         root[it.key()] = streamLibraryEntryToJson(it.value());
     lock.unlock();
 
-    m_store->write(FILENAME, root);
+    m_store->write(m_filename, root);
 }

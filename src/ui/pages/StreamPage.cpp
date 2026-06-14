@@ -334,7 +334,7 @@ StreamPage::StreamPage(CoreBridge* bridge, TorrentClient* torrentClient,
             if (!player) return;
             player->setExternalSubtitleTracks(tracks, originByTrackKey);
         });
-    m_library   = new StreamLibrary(&bridge->store(), this);
+    m_library   = new StreamLibrary(&bridge->store(), QStringLiteral("stream_library.json"), this);
 
     // THEATRE_DOWNLOAD_ONLY P1.2 (2026-05-29) â€” Theatre is download-only.
     // The Stremio stream-server subprocess (StreamServerEngine) and the
