@@ -1723,43 +1723,20 @@ void MangaPage::buildUI()
     connect(m_seriesView, &SeriesView::issueSelected, this, &MangaPage::openComic);
     m_stack->addWidget(m_seriesView);
 
-    // ── Manga / Western mode toggle (top chrome, COMICS_WESTERN_CATALOGUE
-    //    Task 7 2026-05-31, Agent 2). Mode-pill aesthetic: gray/black/white,
-    //    no color, no icon (feedback_no_color_no_emoji). Manga is the default
-    //    left state and its path is untouched; Western is the additive shelf. ──
-    {
-        const QString pillQss = QStringLiteral(
-            "QPushButton#ComicsModePill {"
-            "  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);"
-            "  border-radius: 6px; color: rgba(238,238,238,0.70); padding: 5px 16px; font-size: 13px; }"
-            "QPushButton#ComicsModePill:hover { border: 1px solid rgba(255,255,255,0.25); }"
-            "QPushButton#ComicsModePill:checked {"
-            "  background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.34); color: #fff; }");
-
-        m_mangaTabBtn = new QPushButton(tr("Manga"));
-        m_mangaTabBtn->setObjectName("ComicsModePill");
-        m_mangaTabBtn->setCheckable(true);
-        m_mangaTabBtn->setChecked(true);
-        m_mangaTabBtn->setCursor(Qt::PointingHandCursor);
-        m_mangaTabBtn->setStyleSheet(pillQss);
-
-        m_westernTabBtn = new QPushButton(tr("Western"));
-        m_westernTabBtn->setObjectName("ComicsModePill");
-        m_westernTabBtn->setCheckable(true);
-        m_westernTabBtn->setCursor(Qt::PointingHandCursor);
-        m_westernTabBtn->setStyleSheet(pillQss);
-
-        connect(m_mangaTabBtn,   &QPushButton::clicked, this, &MangaPage::showMangaMode);
-        connect(m_westernTabBtn, &QPushButton::clicked, this, &MangaPage::showWesternMode);
-
-        auto* modeRow = new QHBoxLayout();
-        modeRow->setContentsMargins(20, 12, 20, 0);
-        modeRow->setSpacing(8);
-        modeRow->addWidget(m_mangaTabBtn);
-        modeRow->addWidget(m_westernTabBtn);
-        modeRow->addStretch();
-        layout->addLayout(modeRow);
-    }
+    // ── Manga / Western mode toggle REMOVED (SIX_MODE_RESTRUCTURE Arc 1, 2026-06-14,
+    //    Agent 1). Western is now a TOP-LEVEL Comics pill backed by its own
+    //    WesternComicsPage; the in-Manga "Manga / Western" sub-toggle is redundant
+    //    and was flagged by Hemanth 3×. Manga mode now shows ONLY the manga library
+    //    with NO sub-toggle. m_mangaTabBtn / m_westernTabBtn stay null; showMangaMode()
+    //    / showWesternMode() null-guard them and remain as DEAD reference code (the
+    //    full expand-contract STEP 3 strip of the Western half from MangaPage is a
+    //    later, separate task). The internal showWesternMode() callers (nav-restore /
+    //    detail-back / error-recovery) are now unreachable for the user because
+    //    Western browsing lives on the dedicated page; they remain safe no-ops via
+    //    the m_westernStackIndex / button null-guards. ──
+    //
+    // NOTE: buildWesternScreen() is intentionally STILL called so m_westernStackIndex
+    // stays valid and the dead showWesternMode() path never indexes a missing screen.
 
     // Western browse grid as its own m_stack screen (index captured).
     buildWesternScreen();

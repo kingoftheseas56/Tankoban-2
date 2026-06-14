@@ -198,10 +198,17 @@ void ReadAllComicsScraper::fetchPages(const QString& chapterId)
 
 QList<PageInfo> ReadAllComicsScraper::parsePagesHtml(const QString& html)
 {
-    // Every page is a raw blogspot <img>: src="https://<N>.bp.blogspot.com/...".
-    // No descramble. HTML entities (&#038; / &amp;) decode to '&'.
+    // Page images are raw Blogger-hosted <img> tags. readallcomics serves them
+    // from TWO interchangeable Blogger CDN hosts depending on the issue's upload
+    // era — both are direct, descramble-free image URLs:
+    //   • older uploads:  https://<N>.bp.blogspot.com/...           (e.g. Invincible)
+    //   • newer uploads:  https://blogger.googleusercontent.com/img/... (e.g. Saga)
+    // SIX_MODE_RESTRUCTURE Arc 1 (2026-06-14, Agent 1) — the original regex matched
+    // ONLY the bp.blogspot.com host, so any issue served from googleusercontent
+    // parsed to ZERO pages and the download stalled at 0% forever (Saga repro).
+    // Accept either host. HTML entities (&#038; / &amp;) decode to '&'.
     static const QRegularExpression imgRe(
-        QStringLiteral(R"RE(<img[^>]+src="(https://\d+\.bp\.blogspot\.com/[^"]+)")RE"));
+        QStringLiteral(R"RE(<img[^>]+src="(https://(?:\d+\.bp\.blogspot\.com|blogger\.googleusercontent\.com)/[^"]+)")RE"));
 
     QList<PageInfo> pages;
     QSet<QString> seen;
