@@ -27,6 +27,7 @@ if(TANKOBAN_BUILD_TESTS)
         tests/core/stream/test_auto_source_picker.cpp
         tests/core/stream/test_episode_display_state.cpp
         tests/core/stream/test_stream_mode.cpp
+        tests/core/stream/test_stream_library_codec.cpp
         tests/core/stream/test_anime_catalog_resolver.cpp
         tests/core/stream/test_stream_download_index_dedup.cpp
         tests/core/stream/test_stream_pack_parser.cpp
@@ -109,6 +110,9 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/stream/AutoSourcePicker.cpp
         src/core/stream/EpisodeDisplayState.cpp
         src/core/stream/StreamMode.cpp
+        # SIX_MODE_RESTRUCTURE Arc 2 Task 2 — dep-free entry codec under test
+        # (links Qt JSON only; NO StreamLibrary.cpp -> no TorrentClient/libtorrent).
+        src/core/stream/StreamLibraryCodec.cpp
         src/core/stream/AnimeCatalogResolver.cpp
         src/core/stream/AnimeIdMapCache.cpp
         src/core/stream/StreamDownloadIndex.cpp

@@ -1,4 +1,5 @@
 #include "StreamLibrary.h"
+#include "StreamLibraryCodec.h"
 #include "core/JsonStore.h"
 #include "core/JsonlEventLog.h"
 #include "StreamDownloadIndex.h"
@@ -156,7 +157,7 @@ void StreamLibrary::load()
         if (!key.startsWith("tt"))
             continue;
 
-        StreamLibraryEntry entry = fromJson(it->toObject());
+        StreamLibraryEntry entry = streamLibraryEntryFromJson(it->toObject());
         if (!entry.imdb.isEmpty())
             m_entries[entry.imdb] = entry;
     }
@@ -167,36 +168,8 @@ void StreamLibrary::save()
     QJsonObject root;
     QMutexLocker lock(&m_mutex);
     for (auto it = m_entries.begin(); it != m_entries.end(); ++it)
-        root[it.key()] = toJson(it.value());
+        root[it.key()] = streamLibraryEntryToJson(it.value());
     lock.unlock();
 
     m_store->write(FILENAME, root);
-}
-
-StreamLibraryEntry StreamLibrary::fromJson(const QJsonObject& obj)
-{
-    StreamLibraryEntry e;
-    e.imdb        = obj.value("imdb").toString().trimmed();
-    e.type        = obj.value("type").toString().trimmed();
-    e.name        = obj.value("name").toString().trimmed();
-    e.year        = obj.value("year").toString().trimmed();
-    e.poster      = obj.value("poster").toString().trimmed();
-    e.description = obj.value("description").toString().trimmed();
-    e.imdbRating  = obj.value("imdbRating").toString().trimmed();
-    e.addedAt     = obj.value("addedAt").toInteger(0);
-    return e;
-}
-
-QJsonObject StreamLibrary::toJson(const StreamLibraryEntry& entry)
-{
-    QJsonObject obj;
-    obj["imdb"]        = entry.imdb;
-    obj["type"]        = entry.type;
-    obj["name"]        = entry.name;
-    obj["year"]        = entry.year;
-    obj["poster"]      = entry.poster;
-    obj["description"] = entry.description;
-    obj["imdbRating"]  = entry.imdbRating;
-    obj["addedAt"]     = entry.addedAt;
-    return obj;
 }

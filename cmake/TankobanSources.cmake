@@ -212,6 +212,10 @@ set(SOURCES
     src/core/stream/stremio/StreamServerClient.cpp
     src/core/stream/stremio/StreamServerEngine.cpp
     src/core/stream/StreamLibrary.cpp
+    # SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07) Task 2 — dep-free entry codec
+    # (JSON<->StreamLibraryEntry), split out so codec unit tests link without
+    # TorrentClient/libtorrent. Used by StreamLibrary.cpp load()/save().
+    src/core/stream/StreamLibraryCodec.cpp
     src/core/stream/addon/AddonTransport.cpp
     src/core/stream/addon/AddonRegistry.cpp
     src/core/stream/CatalogAggregator.cpp

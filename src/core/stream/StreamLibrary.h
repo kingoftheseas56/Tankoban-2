@@ -19,6 +19,10 @@ struct StreamLibraryEntry {
     QString description;
     QString imdbRating;
     qint64  addedAt = 0;    // ms since epoch
+    // SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07) — persistent anime discriminator
+    // + resolved Kitsu id. Defaults keep legacy rows (pre-split JSON) non-anime.
+    bool    animeFlag = false;
+    int     kitsuId = -1;
 };
 
 class StreamLibrary : public QObject
@@ -65,8 +69,9 @@ private:
     void load();
     void save();
 
-    static StreamLibraryEntry fromJson(const QJsonObject& obj);
-    static QJsonObject toJson(const StreamLibraryEntry& entry);
+    // SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07), Task 2 — the JSON<->struct
+    // mapping moved to the dep-free StreamLibraryCodec (so codec tests link
+    // without TorrentClient/libtorrent). load()/save() call it directly.
 
     JsonStore* m_store;
     mutable QMutex m_mutex;
