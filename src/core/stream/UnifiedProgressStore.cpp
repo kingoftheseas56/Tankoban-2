@@ -81,12 +81,13 @@ QJsonObject UnifiedProgressStore::episodePayload(const QString& imdbId,
     return it->payload;
 }
 
-QJsonObject UnifiedProgressStore::allEpisodePayloadsForStreamDomain() const
+QJsonObject UnifiedProgressStore::allEpisodePayloadsForStreamDomain(
+    const QString& domainPrefix) const
 {
     QMutexLocker lock(&m_mutex);
     QJsonObject result;
     for (auto it = m_byEpisode.constBegin(); it != m_byEpisode.constEnd(); ++it) {
-        const QString streamKey = streamDomainKeyForEntry(it.value());
+        const QString streamKey = streamDomainKeyForEntry(it.value(), domainPrefix);
         if (!streamKey.isEmpty())
             result[streamKey] = it->payload;
     }
@@ -253,16 +254,44 @@ QJsonObject UnifiedProgressStore::normalizedPayload(const QJsonObject& payload)
     return normalized;
 }
 
-QString UnifiedProgressStore::streamDomainKeyForEntry(const Entry& entry)
+QString UnifiedProgressStore::streamDomainKeyForEntry(const Entry& entry,
+                                                      const QString& domainPrefix)
 {
     if (entry.imdbId.isEmpty())
         return {};
     if (entry.season <= 0 && entry.episode <= 0)
-        return QStringLiteral("stream:%1").arg(entry.imdbId);
-    return QStringLiteral("stream:%1:s%2:e%3")
-        .arg(entry.imdbId)
+        return QStringLiteral("%1:%2").arg(domainPrefix, entry.imdbId);
+    return QStringLiteral("%1:%2:s%3:e%4")
+        .arg(domainPrefix, entry.imdbId)
         .arg(entry.season)
         .arg(entry.episode);
+}
+
+bool UnifiedProgressStore::parseDomainKey(const QString& key, const QString& domainPrefix,
+                                          QString& outImdb, int& outSeason, int& outEpisode)
+{
+    const QStringList parts = key.split(QLatin1Char(':'));
+    // 2-part imdb-only form: "<prefix>:<imdb>" — movies + season-less series.
+    if (parts.size() == 2 && parts[0] == domainPrefix && !parts[1].isEmpty()) {
+        outImdb = parts[1];
+        outSeason = 0;
+        outEpisode = 0;
+        return true;
+    }
+    // 4-part episode form: "<prefix>:<imdb>:s<season>:e<episode>".
+    if (parts.size() >= 4 && parts[0] == domainPrefix
+        && parts[2].startsWith(QLatin1Char('s'))
+        && parts[3].startsWith(QLatin1Char('e'))) {
+        const int season = parts[2].mid(1).toInt();
+        const int episode = parts[3].mid(1).toInt();
+        if (!parts[1].isEmpty() && season > 0 && episode > 0) {
+            outImdb = parts[1];
+            outSeason = season;
+            outEpisode = episode;
+            return true;
+        }
+    }
+    return false;
 }
 
 void UnifiedProgressStore::setEpisodePayloadLocked(const QString& imdbId,

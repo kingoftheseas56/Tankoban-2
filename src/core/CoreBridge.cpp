@@ -29,6 +29,14 @@ static const QMap<QString, QString> PROGRESS_FILES = {
     {"books",  "books_progress.json"},
     {"videos", "video_progress.json"},
     {"stream", "stream_progress.json"},
+    // SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07), Task 5 — the video split gives
+    // anime/tv/movies their own continue-watching JSON files. Each routes onto
+    // the shared UnifiedProgressStore under its own domain-prefixed key
+    // namespace (see isUnifiedVideoDomain below). Legacy "stream" stays for
+    // back-compat until the downstream call sites flip (Tasks 9-13).
+    {"anime",  "anime_progress.json"},
+    {"tv",     "tv_progress.json"},
+    {"movies", "movies_progress.json"},
     {"shows",  "show_prefs.json"},
 };
 
@@ -41,21 +49,27 @@ struct StreamProgressIdentity {
     bool valid = false;
 };
 
-StreamProgressIdentity parseStreamProgressKey(const QString& itemId)
+// SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07), Task 5 — the video modes that route
+// their continue-watching onto the shared UnifiedProgressStore. Each owns a
+// distinct progress JSON file (PROGRESS_FILES) AND a distinct key prefix.
+bool isUnifiedVideoDomain(const QString& domain)
 {
-    const QStringList parts = itemId.split(QLatin1Char(':'));
-    if (parts.size() == 2 && parts[0] == QLatin1String("stream")
-        && !parts[1].isEmpty()) {
-        return {parts[1], 0, 0, true};
-    }
-    if (parts.size() >= 4 && parts[0] == QLatin1String("stream")
-        && parts[2].startsWith(QLatin1Char('s'))
-        && parts[3].startsWith(QLatin1Char('e'))) {
-        const int season = parts[2].mid(1).toInt();
-        const int episode = parts[3].mid(1).toInt();
-        if (!parts[1].isEmpty() && season > 0 && episode > 0)
-            return {parts[1], season, episode, true};
-    }
+    return domain == QLatin1String("stream") || domain == QLatin1String("anime")
+        || domain == QLatin1String("tv") || domain == QLatin1String("movies");
+}
+
+// Parse a continue-watching key under the given domain prefix. Delegates to the
+// dep-free UnifiedProgressStore::parseDomainKey so the build (in the store) and
+// parse halves share one implementation and can never drift. The domain string
+// doubles as the key prefix (e.g. "anime:tt..:s..:e..").
+StreamProgressIdentity parseStreamProgressKey(const QString& itemId,
+                                              const QString& domainPrefix)
+{
+    QString imdb;
+    int season = 0;
+    int episode = 0;
+    if (UnifiedProgressStore::parseDomainKey(itemId, domainPrefix, imdb, season, episode))
+        return {imdb, season, episode, true};
     return {};
 }
 
@@ -192,8 +206,8 @@ QJsonObject CoreBridge::allProgress(const QString& domain) const
         return {};
 
     QJsonObject all = m_store->read(file);
-    if (domain == QLatin1String("stream") && m_unifiedProgress) {
-        const QJsonObject unified = m_unifiedProgress->allEpisodePayloadsForStreamDomain();
+    if (isUnifiedVideoDomain(domain) && m_unifiedProgress) {
+        const QJsonObject unified = m_unifiedProgress->allEpisodePayloadsForStreamDomain(domain);
         for (auto it = unified.constBegin(); it != unified.constEnd(); ++it)
             all[it.key()] = it.value();
     } else if (domain == QLatin1String("videos") && m_unifiedProgress) {
@@ -206,8 +220,8 @@ QJsonObject CoreBridge::allProgress(const QString& domain) const
 
 QJsonObject CoreBridge::progress(const QString& domain, const QString& itemId) const
 {
-    if (m_unifiedProgress && domain == QLatin1String("stream")) {
-        const StreamProgressIdentity id = parseStreamProgressKey(itemId);
+    if (m_unifiedProgress && isUnifiedVideoDomain(domain)) {
+        const StreamProgressIdentity id = parseStreamProgressKey(itemId, domain);
         if (id.valid) {
             const QJsonObject unified =
                 m_unifiedProgress->episodePayload(id.imdbId, id.season, id.episode);
@@ -233,8 +247,8 @@ void CoreBridge::saveProgress(const QString& domain, const QString& itemId, cons
     QJsonObject entry = data;
     entry["updatedAt"] = QDateTime::currentMSecsSinceEpoch();
 
-    if (m_unifiedProgress && domain == QLatin1String("stream")) {
-        const StreamProgressIdentity id = parseStreamProgressKey(itemId);
+    if (m_unifiedProgress && isUnifiedVideoDomain(domain)) {
+        const StreamProgressIdentity id = parseStreamProgressKey(itemId, domain);
         if (id.valid) {
             entry[QStringLiteral("imdbId")] = id.imdbId;
             entry[QStringLiteral("season")] = id.season;
@@ -270,8 +284,8 @@ void CoreBridge::clearProgress(const QString& domain, const QString& itemId)
     all.remove(itemId);
     m_store->write(file, all);
 
-    if (m_unifiedProgress && domain == QLatin1String("stream")) {
-        const StreamProgressIdentity id = parseStreamProgressKey(itemId);
+    if (m_unifiedProgress && isUnifiedVideoDomain(domain)) {
+        const StreamProgressIdentity id = parseStreamProgressKey(itemId, domain);
         if (id.valid)
             m_unifiedProgress->clearEpisode(id.imdbId, id.season, id.episode);
     } else if (m_unifiedProgress && domain == QLatin1String("videos")) {

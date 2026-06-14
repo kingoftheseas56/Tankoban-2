@@ -32,7 +32,23 @@ public:
     void setEpisodePayload(const QString& imdbId, int season, int episode,
                            const QJsonObject& payload);
     QJsonObject episodePayload(const QString& imdbId, int season, int episode) const;
-    QJsonObject allEpisodePayloadsForStreamDomain() const;
+    // SIX_MODE_RESTRUCTURE Arc 2 (2026-06-07), Task 5 — the continue-watching
+    // key namespace is parameterized by a domain prefix so each video mode
+    // (anime/tv/movies) reads its own "<prefix>:<imdb>[:s..:e..]" keys off the
+    // same store. Default "stream" keeps legacy callers byte-identical.
+    QJsonObject allEpisodePayloadsForStreamDomain(
+        const QString& domainPrefix = QStringLiteral("stream")) const;
+
+    // Dep-free inverse of streamDomainKeyForEntry(): parse a continue-watching
+    // key under a given domain prefix back into (imdb, season, episode).
+    // Mirrors CoreBridge::parseStreamProgressKey — both the 2-part imdb-only
+    // form ("<prefix>:<imdb>" → season/episode == 0) and the 4-part
+    // "<prefix>:<imdb>:s<season>:e<episode>" form. Returns false (and leaves
+    // out-params untouched) if the key does not match the prefix/shape.
+    // Static + co-located with the builder so the two can't drift; callable
+    // from the unit test without pulling TorrentClient/libtorrent.
+    static bool parseDomainKey(const QString& key, const QString& domainPrefix,
+                               QString& outImdb, int& outSeason, int& outEpisode);
 
     void setPathPayload(const QString& canonicalPath, const QJsonObject& payload,
                         const QString& legacyVideoId = QString());
@@ -63,7 +79,8 @@ private:
     static Entry entryFromObject(const QJsonObject& obj);
     static QJsonObject entryToObject(const Entry& entry);
     static QJsonObject normalizedPayload(const QJsonObject& payload);
-    static QString streamDomainKeyForEntry(const Entry& entry);
+    static QString streamDomainKeyForEntry(
+        const Entry& entry, const QString& domainPrefix = QStringLiteral("stream"));
 
     void setEpisodePayloadLocked(const QString& imdbId, int season, int episode,
                                  const QJsonObject& payload);
