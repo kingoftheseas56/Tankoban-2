@@ -755,6 +755,11 @@ void MainWindow::buildPageStack()
     // dev-resolver finds it via findChild, so no MainWindow.h member is needed.
     auto *westernPage = new WesternComicsPage(m_bridge);
     m_pageStack->addWidget(westernPage);
+    // SIX_MODE_RESTRUCTURE smoke fix (2026-06-14, Agent 1) — wire the Western
+    // page's reader-open to the shared comic reader, exactly as MangaPage is
+    // wired above (MainWindow.cpp:273-275). Without this, an issue click / the
+    // Continue Reading strip emit openComic into the void (BUG 1).
+    connect(westernPage, &WesternComicsPage::openComic, this, &MainWindow::openComicReader);
     connect(westernPage, &WesternComicsPage::enteredLayer, this,
             [this](const tankoban::ui::LayerEntry& e) {
                 if (m_navController) m_navController->pushLayer(e.pageId, e);

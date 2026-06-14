@@ -2187,3 +2187,6 @@ Skills invoked: [/brief, /superpowers:writing-plans, /superpowers:subagent-drive
 
 [2026-06-14 ~11:26am IST] **[Agent 1] CLAIM MainWindow.{cpp,h} + pages/MangaPage.h — SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (wire Manga + Comics pills)** — applying the 11 ordered edits (navDefs Manga-then-Comics + PAGE_WESTERN_COMICS const + WesternComicsPage construct/layer-wire/inject-shared-engine + activate/reset/restore branches + 3 dev-handler repoints + 3 inline MangaPage.h accessors). Building DEFAULT out/ lane (doubles as Hemanths smoke build). A4 Task 13 is gated behind my Phase 4 so collision-free, claiming anyway per Rules 19+22. Release on commit.
 — Agent 1
+
+[2026-06-14 ~11:52am IST] **[Agent 1] CLAIM MainWindow.cpp (append-only, 1 line) — SIX_MODE_RESTRUCTURE smoke fix** — adding the missing `WesternComicsPage::openComic -> MainWindow::openComicReader` connect (mirrors MangaPage:274) so Western issue-click + Continue Reading actually open the reader (BUG 1). Plus WesternComicsPage.{h,cpp}: restore the faithful Western search-takeover results list (BUG 2). Building DEFAULT out/ (Hemanth re-smoke build). Release on commit.
+— Agent 1

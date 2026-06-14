@@ -36,6 +36,7 @@ class CoreBridge;
 class FadingStackedWidget;
 class TileCard;
 class TileStrip;
+class ComicsTankoyomiSearchWidget;
 class MangaSourceRegistry;
 class ReadComicsScraper;
 class ReadAllComicsScraper;
@@ -149,6 +150,7 @@ private:
     void refreshWesternContinueStrip_();
 
     // ── Western page methods (the page's own copies) ──
+    void ensureSearchTakeover();     // lazily build + wire the page's OWN search-takeover (needs registry)
     void wireSeriesView();           // wire the page's OWN ComicsSeriesView signals
     void wireMangaDownloader();      // wire the injected MangaDownloader signals
     void wireWesternDownloader();    // construct + wire WesternVolumeDownloader (needs TorrentClient)
@@ -203,6 +205,14 @@ private:
 
     // ── The page's OWN series-detail view (the deep decoupling) ──
     tankoban::manga::comics::ComicsSeriesView* m_seriesView = nullptr;
+
+    // ── The page's OWN search-takeover (results list), mirroring MangaPage's
+    //    m_searchTakeover. Constructed LAZILY in setSourceRegistry (the takeover
+    //    wires scraper searchFinished signals at ctor-time and the registry is
+    //    injected after this page is built, so building it in buildUI/ctor — when
+    //    m_sourceRegistry is still null — would silently drop those connections).
+    //    setActiveSourceId("readallcomics"); resultPicked -> onSearchResultActivated. ──
+    ComicsTankoyomiSearchWidget* m_searchTakeover = nullptr;
 
     // ── Injected shared engine (non-owning; MainWindow owns lifetimes) ──
     MangaSourceRegistry*   m_sourceRegistry     = nullptr;

@@ -16,6 +16,7 @@
 #include "core/manga/ReadAllComicsScraper.h"
 #include "core/torrent/TorrentClient.h"
 #include "comics/ComicsSeriesView.h"
+#include "comics/ComicsTankoyomiSearchWidget.h"
 #include "comics/VolumeTile.h"
 
 #include "ui/readers/comic_progress_key.h"
@@ -145,6 +146,10 @@ void WesternComicsPage::setSourceRegistry(MangaSourceRegistry* registry)
     m_sourceRegistry = registry;
     grabScrapersFromRegistry();
     if (m_seriesView) m_seriesView->setSourceRegistry(registry);
+    // The search-takeover wires scraper searchFinished at ctor-time, so it can
+    // only be built once the registry (and NAM, for poster fetches) have been
+    // injected. ensureSearchTakeover() builds once both are present.
+    ensureSearchTakeover();
 }
 
 void WesternComicsPage::setMangaDownloader(MangaDownloader* downloader)
@@ -162,6 +167,9 @@ void WesternComicsPage::setMangaDownloadIndex(MangaDownloadIndex* index)
 void WesternComicsPage::setNetworkManager(QNetworkAccessManager* nam)
 {
     m_nam = nam;
+    // NAM typically arrives AFTER setSourceRegistry (MainWindow injection order);
+    // build the takeover now that both deps are present (no-op if already built).
+    ensureSearchTakeover();
 }
 
 void WesternComicsPage::setTorrentClient(TorrentClient* client)
@@ -593,35 +601,36 @@ void WesternComicsPage::hideSearchHistoryDropdown()
 
 void WesternComicsPage::showSearchMode(const QString& query)
 {
+    // Canonical submit funnel (Enter / search-icon / history-row all route here),
+    // so push-to-history runs exactly once per submitted query. Mirrors
+    // MangaPage::showSearchMode (MangaPage.cpp:3884-3907).
     pushSearchHistory(query);
     hideSearchHistoryDropdown();
     setSearchBusy(true);
 
+    // Emit before the in-page transition so the searchResults layer is recorded
+    // in NavHistory (suppressed during Back/restore via m_inNavRestore).
     if (!m_inNavRestore) {
         QJsonObject blob;
         blob[QStringLiteral("query")] = query;
         emit enteredLayer(makeWesternLayer(QStringLiteral("searchResults"),
                                            QStringLiteral("Search Results"), blob));
     }
-    // The Western search bar emits readallcomics results directly; there is no
-    // separate takeover widget in this page. Run the live search on the scraper;
-    // results land in onSearchResultActivated via the registry-wired signal.
-    if (m_readAllComicsScraper) {
-        // searchFinished from the registry scraper is consumed by per-call
-        // handlers in onSearchResultActivated's open path; the search-results
-        // surface itself is the series view (Western opens one series at a time).
-        // For STEP 1 parity the page drives a one-shot search whose first result
-        // opens the series view (mirrors the manga takeover pick).
-        auto conn = std::make_shared<QMetaObject::Connection>();
-        *conn = connect(m_readAllComicsScraper, &MangaScraper::searchFinished, this,
-            [this, conn](const QList<MangaResult>& results) {
-                QObject::disconnect(*conn);
-                setSearchBusy(false);
-                if (results.isEmpty()) return;
-                onSearchResultActivated(results.first());
-            });
-        m_readAllComicsScraper->search(query, 60);
+
+    // FAITHFUL Western search (BUG 2 fix, 2026-06-14): drive the page's OWN
+    // search-takeover — a RESULTS LIST where clicking a result opens that series
+    // (resultPicked -> onSearchResultActivated). This restores MangaPage's
+    // original flow (m_searchTakeover->search + setCurrentWidget). The previous
+    // STEP-1 copy reimplemented this as a one-shot "open the first result", which
+    // was both wrong behavior AND opened an empty series view — the smoke break.
+    ensureSearchTakeover();
+    if (m_searchTakeover) {
+        m_searchTakeover->search(query);            // shows its own "Searching..." status
+        m_stack->setCurrentWidget(m_searchTakeover);
+        // The takeover surface owns the in-screen status now; drop the bar spinner.
+        setSearchBusy(false);
     } else {
+        // Registry/NAM not injected yet (should not happen post-STEP-2 wiring).
         setSearchBusy(false);
     }
 }
@@ -1279,6 +1288,35 @@ void WesternComicsPage::fetchPosterForTile(TileCard* card, const QString& coverU
 // ---------------------------------------------------------------------------
 // signal wiring (page-owned series view + injected downloader)
 // ---------------------------------------------------------------------------
+
+void WesternComicsPage::ensureSearchTakeover()
+{
+    // Build once, and only once BOTH the registry (drives scraper search) and the
+    // NAM (poster thumbnails) have been injected. Mirrors MangaPage's
+    // m_searchTakeover construction (MainWindow built the registry/NAM before
+    // buildUI there; here they arrive via setters, so we build lazily).
+    if (m_searchTakeover || !m_sourceRegistry || !m_nam) return;
+
+    m_searchTakeover = new ComicsTankoyomiSearchWidget(m_sourceRegistry, m_nam, this);
+    // Western lane: the takeover searches LIVE readallcomics (find any western
+    // comic by name). Results carry source=="readallcomics", routed into the
+    // page's own series view by onSearchResultActivated.
+    m_searchTakeover->setActiveSourceId(QStringLiteral("readallcomics"));
+    m_stack->addWidget(m_searchTakeover);
+
+    // Back out of the results surface -> Western library (defensive reset of the
+    // busy spinner + any lingering history dropdown; mirrors MangaPage:253-263).
+    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::backRequested,
+            this, [this]() {
+        setSearchBusy(false);
+        hideSearchHistoryDropdown();
+        if (!m_inNavRestore) emit exitedLayer();
+        showLibraryMode();
+    });
+    // Pick a result -> open THAT series (the faithful flow; MangaPage:264-265).
+    connect(m_searchTakeover, &ComicsTankoyomiSearchWidget::resultPicked,
+            this, &WesternComicsPage::onSearchResultActivated);
+}
 
 void WesternComicsPage::wireSeriesView()
 {
