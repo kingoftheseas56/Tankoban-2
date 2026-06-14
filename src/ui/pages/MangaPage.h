@@ -125,6 +125,16 @@ public:
     // Returns nullptr before MangaPage::activate() completes construction.
     MangaDownloadIndex* mangaDownloadIndex() const { return m_mangaDownloadIndex; }
 
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — non-owning
+    // accessors so MainWindow can inject MangaPage's shared engine into the new
+    // standalone WesternComicsPage (single shared store; must NOT duplicate).
+    // All four backing members are built in MangaPage's ctor via buildUI()
+    // (m_nam + m_sourceRegistry at MangaPage.cpp:195-196, m_mangaDownloader at
+    // :331), so each returns non-null the instant `new MangaPage(...)` returns.
+    MangaSourceRegistry* sourceRegistry() const { return m_sourceRegistry; }
+    MangaDownloader* mangaDownloader() const { return m_mangaDownloader; }
+    QNetworkAccessManager* networkManager() const { return m_nam; }
+
     // COMICS_DOWNLOAD_DISPLAY_PROJECTION 2026-05-26 (Agent 9) — canonical
     // display helpers. ComicsDownloadsPage calls these to project raw
     // (sourceId, seriesId) buckets into human-grouped series cards.

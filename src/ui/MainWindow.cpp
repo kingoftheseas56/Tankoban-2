@@ -3,6 +3,7 @@
 #include "RootFoldersOverlay.h"
 #include "widgets/ThemePicker.h"
 #include "pages/MangaPage.h"
+#include "pages/WesternComicsPage.h"
 #include "pages/BooksPage.h"
 #include "pages/VideosPage.h"
 #include "pages/OrganisePage.h"
@@ -62,6 +63,10 @@
 
 // ── Page id constants ───────────────────────────────────────────────────────
 static constexpr const char *PAGE_COMICS       = "comics";
+// SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — the new standalone
+// Western (RCO / readallcomics) page's nav/objectName id. PAGE_COMICS stays
+// "comics" (the Manga pill's legacy pageId — no rename, no QSettings migration).
+static constexpr const char *PAGE_WESTERN_COMICS = "western_comics";
 static constexpr const char *PAGE_BOOKS        = "books";
 static constexpr const char *PAGE_VIDEOS       = "videos";
 static constexpr const char *PAGE_ORGANISE     = "organise";
@@ -529,7 +534,14 @@ void MainWindow::buildTopBar()
 
     struct NavDef { const char *id; const char *label; };
     const NavDef navDefs[] = {
-        { PAGE_COMICS,  "Comics"  },
+        // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — split the
+        // old "Comics" pill into two: Manga (PAGE_COMICS, the Asian-manga half,
+        // same legacy pageId "comics") then Comics (PAGE_WESTERN_COMICS, the
+        // Western/RCO half). Order = Manga-then-Comics keeps PAGE_COMICS first so
+        // Ctrl+1 + the boot default activatePage(PAGE_COMICS) stay on the manga
+        // library. The generic for-loop below wires both pills automatically.
+        { PAGE_COMICS,         "Manga"  },
+        { PAGE_WESTERN_COMICS, "Comics" },
         { PAGE_BOOKS,   "Books"   },
         // TANKORENT_STREAM_INTEGRATION 2026-05-15 — Videos sidebar entry
         // removed; VideosPage stays linked for VideosScanner reuse by the
@@ -734,6 +746,32 @@ void MainWindow::buildPageStack()
     }
     dbg("4b-comicspage-created");
 
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — the new
+    // standalone Western (RCO / readallcomics) page, peer to MangaPage. It owns
+    // its OWN ComicsSeriesView + stack; the SHARED download engine is injected
+    // below (after MangaPage + TorrentClient are built). Layer wiring mirrors
+    // MangaPage's exactly, swapping the popLayer/root-layer literal to
+    // "western_comics". Kept as a local (parity with comicsPage) — the
+    // dev-resolver finds it via findChild, so no MainWindow.h member is needed.
+    auto *westernPage = new WesternComicsPage(m_bridge);
+    m_pageStack->addWidget(westernPage);
+    connect(westernPage, &WesternComicsPage::enteredLayer, this,
+            [this](const tankoban::ui::LayerEntry& e) {
+                if (m_navController) m_navController->pushLayer(e.pageId, e);
+            });
+    connect(westernPage, &WesternComicsPage::exitedLayer, this, [this]() {
+        if (m_navController) m_navController->popLayer(QStringLiteral("western_comics"));
+    });
+    if (m_navController) {
+        tankoban::ui::LayerEntry westernRoot{
+            QStringLiteral("western_comics"),
+            QStringLiteral("library"),
+            QStringLiteral("Library"),
+            {}};
+        m_navController->setRootLayer(QStringLiteral("western_comics"), westernRoot);
+    }
+    dbg("4b2-westerncomicspage-created");
+
     auto *booksPage = new BooksPage(m_bridge);
     m_pageStack->addWidget(booksPage);
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- minimal layer wiring for
@@ -881,6 +919,20 @@ void MainWindow::buildPageStack()
     // downloads. MangaPage caches both ledger + provider; signals fire on
     // metadataReady / pieceFinished / torrentError via queued connections.
     comicsPage->setTorrentClient(torrentClient);
+
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — inject the
+    // SHARED engine MangaPage just built into WesternComicsPage (single shared
+    // store, NEVER duplicated — duplicating MangaDownloadIndex would corrupt the
+    // download index). Anchored here (not at the construct site above) because
+    // torrentClient is constructed at MainWindow scope well after the page; the
+    // local westernPage is still in scope from the construct block above.
+    // setTorrentClient + setNetworkManager must BOTH run for WesternVolumeDownloader
+    // to lazily build (it needs both) — kept together in this block.
+    westernPage->setSourceRegistry(comicsPage->sourceRegistry());
+    westernPage->setMangaDownloader(comicsPage->mangaDownloader());
+    westernPage->setMangaDownloadIndex(comicsPage->mangaDownloadIndex());
+    westernPage->setNetworkManager(comicsPage->networkManager());
+    westernPage->setTorrentClient(torrentClient);
 
     m_tankorentPage = new TankorentPage(m_bridge, torrentClient);
     m_tankorentPage->setObjectName(PAGE_TANKORENT);
@@ -1071,6 +1123,10 @@ void MainWindow::activatePage(const QString &pageId)
             // Activate page on switch
             if (auto *comics = qobject_cast<MangaPage*>(m_pageStack->widget(i)))
                 comics->activate();
+            // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — activate
+            // the Western page on switch (parity with MangaPage above).
+            if (auto *western = qobject_cast<WesternComicsPage*>(m_pageStack->widget(i)))
+                western->activate();
             if (auto *books = qobject_cast<BooksPage*>(m_pageStack->widget(i)))
                 books->activate();
             if (auto *videos = qobject_cast<VideosPage*>(m_pageStack->widget(i)))
@@ -1114,6 +1170,12 @@ void MainWindow::resetActivePageToRoot() {
     if (!cur) return;
     if (auto* comics = qobject_cast<MangaPage*>(cur)) {
         comics->resetToRoot();
+        return;
+    }
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — Comics pill
+    // hard-resets the Western page to its library root when already on it.
+    if (auto* western = qobject_cast<WesternComicsPage*>(cur)) {
+        western->resetToRoot();
         return;
     }
     if (auto* stream = qobject_cast<StreamPage*>(cur)) {
@@ -1183,6 +1245,13 @@ void MainWindow::onLayerRestoreRequested(const tankoban::ui::LayerEntry& target)
     if (target.pageId == QStringLiteral("comics")) {
         if (auto* comics = m_pageStack->findChild<MangaPage*>())
             comics->restoreLayer(target);
+        return;
+    }
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — Back-chevron
+    // deep-layer restore for the Western page.
+    if (target.pageId == QStringLiteral("western_comics")) {
+        if (auto* western = m_pageStack->findChild<WesternComicsPage*>())
+            western->restoreLayer(target);
         return;
     }
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Task 9: Stream page restore.
@@ -1802,6 +1871,13 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
     auto comicsPage = [this]() -> MangaPage* {
         return m_pageStack ? m_pageStack->findChild<MangaPage*>() : nullptr;
     };
+    // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — dev-resolver for
+    // the new Western page. The 3 comics_*_western_* handlers repoint here; the
+    // comicsPage lambda above stays for all manga comics_* handlers + dump_ui +
+    // library_*.
+    auto westernPage = [this]() -> WesternComicsPage* {
+        return m_pageStack ? m_pageStack->findChild<WesternComicsPage*>() : nullptr;
+    };
 
     if (cmd == QLatin1String("ping")) {
         QJsonArray cmds{ "ping","get_state","open_page","scan_videos",
@@ -2300,32 +2376,32 @@ QJsonObject MainWindow::handleDevCommand(const QString& cmd, int seq, const QJso
 
     // v1.11 Western download smoke harness (2026-06-02).
     if (cmd == QLatin1String("comics_open_western_series")) {
-        auto* comics = comicsPage();
-        if (!comics)
-            return err("INTERNAL", "MangaPage not initialized");
+        auto* western = westernPage();
+        if (!western)
+            return err("INTERNAL", "WesternComicsPage not initialized");
         const QString seriesId = payload.value("seriesId").toString();
         if (seriesId.isEmpty())
             return err("BAD_REQUEST", "payload.seriesId required");
-        activatePage(QStringLiteral("comics"));
-        return reply(comics->devOpenWesternSeries(seriesId));
+        activatePage(QStringLiteral("western_comics"));
+        return reply(western->devOpenWesternSeries(seriesId));
     }
 
     if (cmd == QLatin1String("comics_download_western_edition")) {
-        auto* comics = comicsPage();
-        if (!comics)
-            return err("INTERNAL", "MangaPage not initialized");
+        auto* western = westernPage();
+        if (!western)
+            return err("INTERNAL", "WesternComicsPage not initialized");
         const int volumeNumber = payload.value("volumeNumber").toInt();
         if (volumeNumber <= 0)
             return err("BAD_REQUEST", "payload.volumeNumber must be a positive integer");
-        return reply(comics->devDownloadWesternEdition(volumeNumber));
+        return reply(western->devDownloadWesternEdition(volumeNumber));
     }
 
     if (cmd == QLatin1String("comics_get_western_download_state")) {
-        auto* comics = comicsPage();
-        if (!comics)
-            return err("INTERNAL", "MangaPage not initialized");
+        auto* western = westernPage();
+        if (!western)
+            return err("INTERNAL", "WesternComicsPage not initialized");
         const int volumeNumber = payload.value("volumeNumber").toInt(0);
-        return reply(comics->devWesternDownloadState(volumeNumber));
+        return reply(western->devWesternDownloadState(volumeNumber));
     }
 
     if (cmd == QLatin1String("dump_ui")) {
