@@ -24,6 +24,7 @@
 #include "core/stream/StreamRescueScanner.h"
 #include "readers/ComicReader.h"
 #include "readers/BookReader.h"
+#include "web/WebShell.h"
 #include "player/VideoPlayer.h"
 #include "core/CoreBridge.h"
 #include "core/DebugLogBuffer.h"
@@ -342,7 +343,25 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     });
 
     DebugLogBuffer::instance().info("mainwindow", "5f-before-central");
-    setCentralWidget(root);
+
+    // QWEBENGINE_UI_PIVOT Phase 0 (2026-06-15) — when TANKOBAN_WEB_UI=1, host the
+    // Electron React UI in a WebShell as the central widget instead of the native
+    // shell. CRITICAL: do NOT call setCentralWidget(root) first — QMainWindow
+    // deletes the *previous* central widget when a new one is set, which would
+    // delete `root` AND its children (m_glassBg, the readers, NavRail, page stack)
+    // that MainWindow keeps raw pointers to and accesses in resizeEvent →
+    // 0xC0000005 access-violation crash in Qt6Widgets + the window never shows.
+    // Instead keep `root` ALIVE but hidden (a child of `this`, never the central
+    // widget) so every native pointer stays valid; the web UI fully covers it.
+    if (qEnvironmentVariable("TANKOBAN_WEB_UI") == QLatin1String("1")) {
+        root->hide();
+        m_webShell = new WebShell(this, this);
+        setCentralWidget(m_webShell);
+        DebugLogBuffer::instance().info("mainwindow", "5f2-web-ui-central");
+    } else {
+        setCentralWidget(root);
+    }
+
     bindShortcuts();
     setupTrayIcon();
     DebugLogBuffer::instance().info("mainwindow", "5g-constructor-done");

@@ -33,6 +33,7 @@ class StreamDownloadIndex;
 namespace tankoban::ui { class PerModeNavController; }
 namespace tankoban::ui { class NavRail; }
 namespace tankoban::ui { class CenterSearchBar; }
+class WebShell;  // QWEBENGINE_UI_PIVOT Phase 0 — Electron-UI host (global ns)
 namespace tankoban::ui { struct LayerEntry; }
 class QJsonObject;
 struct StreamBulkGroupRecord;
@@ -336,6 +337,10 @@ private:
     // HARBOR_REDESIGN Phase 1 Task 5 — the window-centered frosted search pill,
     // lives in the chrome strip; routes submits to the active mode's search.
     tankoban::ui::CenterSearchBar *m_centerSearch = nullptr;
+
+    // QWEBENGINE_UI_PIVOT Phase 0 — the Electron-UI host (central widget when
+    // TANKOBAN_WEB_UI=1; null in native mode). `root` stays alive+hidden behind it.
+    WebShell *m_webShell = nullptr;
 
     // Global Back navigation (PHASE 1 NAV REDESIGN 2026-05-17)
     tankoban::ui::PerModeNavController *m_navController = nullptr;

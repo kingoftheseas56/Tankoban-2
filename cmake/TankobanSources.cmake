@@ -51,6 +51,11 @@ set(SOURCES
     src/ui/readers/ComicReader.cpp
     src/ui/readers/BookReader.cpp
     src/ui/readers/BookBridge.cpp
+    # QWEBENGINE_UI_PIVOT Phase 0 (2026-06-15) — host the Electron React UI in a
+    # QWebEngineView + QWebChannel bridge (window.api shim). Flag-gated behind
+    # TANKOBAN_WEB_UI=1 in MainWindow; native UI stays default.
+    src/ui/web/WebShell.cpp
+    src/ui/web/TankobanWebBridge.cpp
     src/core/tts/EdgeTtsClient.cpp
     src/core/tts/EdgeTtsWorker.cpp
     src/ui/readers/ScrollStripCanvas.cpp
@@ -310,6 +315,8 @@ set(HEADERS
     src/ui/readers/comic_progress_key.h
     src/ui/readers/BookReader.h
     src/ui/readers/BookBridge.h
+    src/ui/web/WebShell.h
+    src/ui/web/TankobanWebBridge.h
     src/core/tts/EdgeTtsClient.h
     src/core/tts/EdgeTtsWorker.h
     src/ui/readers/SmoothScrollArea.h
