@@ -24,6 +24,10 @@
 // source via the Stremio stream-server; explicit download actions stay on
 // libtorrent (hybrid, Hemanth 2026-06-09).
 #include "ui/pages/stream/StreamSourceChoice.h"
+// HARBOR_THEATRE_HOME 2026-06-15 — full definition needed for the
+// QVector<FeaturedHero::HeroItem> m_heroCollected progressive-reveal buffer
+// member below (a forward declaration is not enough for a value-type member).
+#include "ui/pages/stream/FeaturedHero.h"
 
 class StreamServerEngine;
 class StreamPlayerController;
@@ -62,6 +66,10 @@ class StreamAggregator;
 class MetaAggregator;
 class SubtitlesAggregator;
 struct StreamPickerChoice;
+// HARBOR_REDESIGN Theatre Content Home Phase A — featured hero carousel +
+// the catalog fetcher that feeds its trending slides.
+class FeaturedHero;
+class CatalogAggregator;
 // DOWNLOADS_OVERHAUL_V2 T9 — forward-declared so executeCheckoutPlan's
 // const-ref parameter compiles without pulling SeasonCheckoutPanel.h
 // into the header. The full definition is included in StreamPage.cpp.
@@ -525,6 +533,45 @@ private:
     QScrollArea* m_browseScroll  = nullptr;
     QWidget*     m_scrollHome    = nullptr;
     QVBoxLayout* m_scrollLayout  = nullptr;
+
+    // HARBOR_REDESIGN Theatre Content Home Phase A — featured hero carousel at
+    // the TOP of the home scroll. Owned by StreamPage. m_heroCatalog is the
+    // CatalogAggregator that fetches a trending/popular movie catalog to feed
+    // the hero's slides; m_heroFallbackUsed records that we fell back to the
+    // library (so a later catalog result can still upgrade it).
+    tankostream::stream::FeaturedHero* m_featuredHero = nullptr;
+    tankostream::stream::CatalogAggregator* m_heroCatalog = nullptr;
+    bool m_heroPopulated = false;
+    // HARBOR_THEATRE_HOME 2026-06-15 — guards the single metaItemReady→hero
+    // backdrop connection so repeated populateFeaturedHero() calls don't stack
+    // duplicate handlers (each would re-fire setBackdropUrl for every detail
+    // emit). Set true the first time we wire the hero backdrop bridge.
+    bool m_heroMetaConnected = false;
+
+    // HARBOR_THEATRE_HOME 2026-06-15 — backdrop-only progressive reveal.
+    // Cinemeta catalog list rows carry NO landscape `background`; it only exists
+    // in each title's meta DETAIL (MetaItem.preview.background). So we fire a
+    // detail fetch for a LARGER candidate pool (up to kHeroCandidatePool tt-ids
+    // from the chosen movie catalog) and keep only the titles whose detail
+    // actually HAS a backdrop. m_heroCollected is the ordered, imdb-deduped buffer
+    // of survivors (capped at kHeroSlideCap); m_heroPendingMeta counts detail
+    // fetches still outstanding so we can detect "all candidates resolved, zero
+    // backdrops" and fall back to the next-best catalog. m_heroCandidateRank is
+    // the rank of the catalog currently being mined (so the fallback picks the
+    // NEXT one). m_heroFallbackTried guards the single fallback hop.
+    static constexpr int kHeroCandidatePool = 15;
+    static constexpr int kHeroSlideCap      = 5;
+    QVector<tankostream::stream::FeaturedHero::HeroItem> m_heroCollected;
+    int  m_heroPendingMeta    = 0;
+    int  m_heroCandidateRank  = -1;
+    bool m_heroFallbackTried  = false;
+
+    void populateFeaturedHero();
+    void populateFeaturedHeroFromLibrary();
+    // HARBOR_THEATRE_HOME 2026-06-15 — load + mine one movie catalog (by rank)
+    // for backdropped hero titles. Returns false if no catalog at/after
+    // `minRank` exists (caller then hides the hero).
+    bool loadHeroCandidateCatalog(int minRank);
 
     // Home board (Phase 3 Batch 3.2) — owns the continue strip + catalog rows
     tankostream::stream::StreamHomeBoard* m_homeBoard = nullptr;

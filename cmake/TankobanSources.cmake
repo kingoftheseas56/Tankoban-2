@@ -261,6 +261,7 @@ set(SOURCES
     src/ui/pages/stream/AddonDetailPanel.cpp
     src/ui/pages/stream/StreamHomeBoard.cpp
     src/ui/pages/stream/CatalogBrowseScreen.cpp
+    src/ui/pages/stream/FeaturedHero.cpp
 )
 
 set(HEADERS
@@ -482,4 +483,5 @@ set(HEADERS
     src/ui/pages/stream/AddonDetailPanel.h
     src/ui/pages/stream/StreamHomeBoard.h
     src/ui/pages/stream/CatalogBrowseScreen.h
+    src/ui/pages/stream/FeaturedHero.h
 )

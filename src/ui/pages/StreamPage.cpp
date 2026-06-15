@@ -27,6 +27,8 @@
 #include "stream/StreamContinueStrip.h"
 #include "stream/StreamHomeBoard.h"
 #include "stream/CatalogBrowseScreen.h"
+#include "stream/FeaturedHero.h"
+#include "core/stream/CatalogAggregator.h"
 #include "stream/TheatreDownloadPanel.h"
 #include "stream/SeasonCheckoutPanel.h"
 #include "core/stream/StreamProgress.h"
@@ -66,6 +68,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QParallelAnimationGroup>
+#include <QPointer>
 #include <QProgressBar>
 #include <QPropertyAnimation>
 #include <QRegularExpression>
@@ -87,6 +90,23 @@
 #include <memory>
 
 namespace {
+
+// HARBOR_THEATRE_HOME 2026-06-15 — upgrade a TMDB/Cinemeta backdrop URL to a
+// high-res landscape variant. Cinemeta/TMDB serve sized image segments like
+// `/w300/`, `/w342/`, `/w500/`, `/w780/`; the hero is a 560px-tall full-width
+// banner, so a w300 backdrop arrives soft + smeared. Swap any small size
+// segment for `/w1280/`. Non-TMDB URLs (no recognizable size segment) pass
+// through unchanged. Idempotent.
+QString upgradeBackdropUrl(const QString& url)
+{
+    if (url.isEmpty())
+        return url;
+    static const QRegularExpression kTmdbSize(
+        QStringLiteral("/w(92|154|185|300|342|500|780)/"));
+    QString out = url;
+    out.replace(kTmdbSize, QStringLiteral("/w1280/"));
+    return out;
+}
 
 // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- construct a LayerEntry for
 // the Stream page. All emit sites call makeStreamLayer so the pageId is
@@ -358,6 +378,254 @@ void StreamPage::activate()
         m_homeBoard->refresh();
     if (m_libraryLayout)
         m_libraryLayout->refresh();
+    // HARBOR_REDESIGN Theatre Content Home Phase A — populate the featured hero
+    // the first time the page activates (and keep autoplay paused when hidden).
+    populateFeaturedHero();
+}
+
+// HARBOR_REDESIGN Theatre Content Home Phase A — featured hero data wiring.
+// HARBOR_THEATRE_HOME 2026-06-15 — BACKDROP-ONLY, PROGRESSIVE REVEAL.
+//
+// PROBLEM the old text-first wiring hit: Cinemeta/Stremio *catalog* list rows
+// carry NO landscape `background` (only a portrait `poster`). The landscape
+// backdrop the hero needs lives ONLY in each title's meta DETAIL
+// (MetaItem.preview.background). The old code built slides text-first from
+// whatever the catalog listed and hoped the detail would later supply a
+// backdrop — but the "popular" movie catalog was feeding brand-new titles whose
+// DETAIL ALSO has no background, so every slide stayed a placeholder forever.
+//
+// FIX — only ever show titles that actually HAVE a backdrop:
+//   1. From the chosen movie catalog page, take up to kHeroCandidatePool (~15)
+//      tt-id candidates (skip non-tt ids — they can't resolve a detail).
+//   2. Fire fetchMetaItem(id,"movie") for ALL of them (cached, 60s TTL — cheap).
+//   3. In metaItemReady, keep ONLY arrivals whose preview.background is non-empty;
+//      build a HeroItem from the DETAIL preview (id/name/description/year/backdrop).
+//      Collect in arrival order, imdb-deduped, capped at kHeroSlideCap (5).
+//   4. Progressive reveal: first survivor → setItems + show; each subsequent
+//      survivor → appendItem (grows the carousel without disturbing the active
+//      slide / autoplay).
+//   5. If, after ALL candidates resolve, ZERO had a backdrop → fall back to the
+//      next-best movie catalog (same flow); if that also yields nothing → hide.
+//      Never show backdrop-less placeholder slides.
+void StreamPage::populateFeaturedHero()
+{
+    if (!m_featuredHero)
+        return;
+
+    // Keep autoplay honest: pause whenever the Theatre page isn't the visible
+    // page. activate() is the "page shown" hook; pair it with a pause here when
+    // we're not the current top-level page.
+    m_featuredHero->setPaused(!isVisible());
+
+    if (m_heroPopulated)
+        return;  // one-shot
+    m_heroPopulated = true;
+
+    // Fresh populate: reset the collected buffer + bookkeeping.
+    m_heroCollected.clear();
+    m_heroPendingMeta   = 0;
+    m_heroCandidateRank = -1;
+    m_heroFallbackTried = false;
+
+    // Wire the meta-detail → hero bridge EXACTLY once: every fetchMetaItem we
+    // fire emits metaItemReady; we filter to backdropped titles, collect them,
+    // and progressively reveal. Guarded by a member flag AND Qt::UniqueConnection
+    // so repeated populateFeaturedHero() calls never stack duplicate handlers.
+    if (m_metaAggregator && !m_heroMetaConnected) {
+        m_heroMetaConnected = true;
+        QPointer<StreamPage> guard(this);
+        connect(m_metaAggregator,
+                &tankostream::stream::MetaAggregator::metaItemReady, this,
+                [this, guard](const tankostream::addon::MetaItem& item) {
+                    if (!guard || !m_featuredHero)
+                        return;
+                    if (m_heroPendingMeta <= 0)
+                        return;  // not from a hero candidate round (or already done)
+                    // One outstanding candidate has resolved.
+                    --m_heroPendingMeta;
+
+                    const tankostream::addon::MetaItemPreview& pv = item.preview;
+                    const QString backdrop =
+                        upgradeBackdropUrl(pv.background.toString());
+
+                    // BACKDROP-ONLY GATE: a title with no landscape detail
+                    // background never becomes a slide (no placeholder slides).
+                    if (!backdrop.isEmpty() && !pv.id.isEmpty() &&
+                        m_heroCollected.size() < kHeroSlideCap) {
+                        // De-dup by imdb id (a candidate may resolve more than
+                        // once across cache/refresh emits).
+                        bool dup = false;
+                        for (const auto& existing : m_heroCollected) {
+                            if (existing.imdb == pv.id) { dup = true; break; }
+                        }
+                        if (!dup) {
+                            tankostream::stream::FeaturedHero::HeroItem h;
+                            h.imdb  = pv.id;
+                            h.type  = pv.type.isEmpty() ? QStringLiteral("movie")
+                                                        : pv.type;
+                            h.title = pv.name;
+                            h.synopsis = pv.description;
+                            h.backdropUrl = backdrop;
+                            const QString year = pv.releaseInfo.isEmpty()
+                                ? (pv.released.isValid()
+                                       ? QString::number(pv.released.date().year())
+                                       : QString())
+                                : pv.releaseInfo;
+                            const QString typeLabel =
+                                (h.type == QLatin1String("series"))
+                                    ? QStringLiteral("Series")
+                                    : QStringLiteral("Movie");
+                            h.metaLine = year.isEmpty()
+                                ? typeLabel
+                                : (year + QStringLiteral(" ") +
+                                   QString(QChar(0x00B7)) + QStringLiteral(" ") +
+                                   typeLabel);  // "2024 · Movie"
+
+                            // Progressive reveal: first survivor sets + shows the
+                            // hero; each later survivor appends one slide without
+                            // disturbing the active slide / autoplay clock.
+                            if (m_heroCollected.isEmpty()) {
+                                m_heroCollected.append(h);
+                                m_featuredHero->setItems(m_heroCollected);
+                                m_featuredHero->show();
+                                m_featuredHero->setPaused(!isVisible());
+                            } else {
+                                m_heroCollected.append(h);
+                                m_featuredHero->appendItem(h);
+                            }
+                        }
+                    }
+
+                    // All candidates of THIS catalog round resolved with ZERO
+                    // backdropped survivors → try the next-best catalog once,
+                    // else hide. (If we already collected ≥1, leave it as-is.)
+                    if (m_heroPendingMeta == 0 && m_heroCollected.isEmpty()) {
+                        if (!m_heroFallbackTried) {
+                            m_heroFallbackTried = true;
+                            if (loadHeroCandidateCatalog(m_heroCandidateRank + 1))
+                                return;  // next round in flight
+                        }
+                        populateFeaturedHeroFromLibrary();  // hides the hero
+                    }
+                },
+                Qt::UniqueConnection);
+    }
+
+    // Mine the best (rank 0) movie catalog first.
+    if (!loadHeroCandidateCatalog(0))
+        populateFeaturedHeroFromLibrary();  // no movie catalog at all → hide
+}
+
+// HARBOR_THEATRE_HOME 2026-06-15 — load the best movie catalog whose rank is
+// >= minRank and mine up to kHeroCandidatePool tt-id candidates from it, firing
+// a meta-detail fetch per candidate (the metaItemReady bridge in
+// populateFeaturedHero collects the backdropped survivors). Returns false if no
+// movie catalog at/after minRank exists.
+bool StreamPage::loadHeroCandidateCatalog(int minRank)
+{
+    if (!m_addonRegistry || !m_metaAggregator)
+        return false;
+
+    QString bestAddonId, bestCatalogId;
+    int bestRank = 1 << 20;  // sentinel above every real rank (0..100)
+    for (const tankostream::addon::AddonDescriptor& addon : m_addonRegistry->list()) {
+        if (!addon.flags.enabled)
+            continue;
+        for (const tankostream::addon::ManifestCatalog& c : addon.manifest.catalogs) {
+            if (c.type.compare(QLatin1String("movie"), Qt::CaseInsensitive) != 0)
+                continue;
+            const QString hay = (c.name + QLatin1Char(' ') + c.id).toLower();
+            int rank = 100;
+            if (hay.contains(QLatin1String("popular")))       rank = 0;
+            else if (hay.contains(QLatin1String("trending"))) rank = 1;
+            else if (hay.contains(QLatin1String("top")))      rank = 2;
+            else if (hay.contains(QLatin1String("featured")))  rank = 3;
+            // Skip catalogs we already mined (rank < minRank); pick the next-best.
+            if (rank < minRank)
+                continue;
+            if (rank < bestRank) {
+                bestRank = rank;
+                bestAddonId = addon.manifest.id;
+                bestCatalogId = c.id;
+            }
+        }
+    }
+
+    if (bestAddonId.isEmpty() || bestCatalogId.isEmpty())
+        return false;
+
+    m_heroCandidateRank = bestRank;
+
+    if (!m_heroCatalog)
+        m_heroCatalog = new tankostream::stream::CatalogAggregator(m_addonRegistry, this);
+
+    // (Re)wire the catalog-page handler each load via UniqueConnection so the
+    // fallback hop's second load() reuses one handler, never stacks duplicates.
+    QPointer<StreamPage> guard(this);
+    connect(m_heroCatalog, &tankostream::stream::CatalogAggregator::catalogPage, this,
+        [this, guard](const QList<tankostream::addon::MetaItemPreview>& items, bool) {
+            if (!guard || !m_metaAggregator)
+                return;
+            // Take up to kHeroCandidatePool tt-id candidates (non-tt ids can't
+            // resolve a meta detail, so they can never supply a backdrop — skip).
+            int fired = 0;
+            for (const tankostream::addon::MetaItemPreview& it : items) {
+                if (fired >= kHeroCandidatePool)
+                    break;
+                if (!it.id.startsWith(QLatin1String("tt")))
+                    continue;
+                ++m_heroPendingMeta;
+                ++fired;
+                m_metaAggregator->fetchMetaItem(
+                    it.id, it.type.isEmpty() ? QStringLiteral("movie") : it.type);
+            }
+            if (fired == 0) {
+                // Catalog had no resolvable tt-id candidates → fallback / hide.
+                if (!m_heroFallbackTried) {
+                    m_heroFallbackTried = true;
+                    if (loadHeroCandidateCatalog(m_heroCandidateRank + 1))
+                        return;
+                }
+                populateFeaturedHeroFromLibrary();
+            }
+        },
+        Qt::UniqueConnection);
+    connect(m_heroCatalog, &tankostream::stream::CatalogAggregator::catalogError, this,
+        [this, guard](const QString&, const QString&) {
+            if (!guard)
+                return;
+            // Catalog fetch failed → try next-best catalog once, else hide.
+            if (!m_heroFallbackTried) {
+                m_heroFallbackTried = true;
+                if (loadHeroCandidateCatalog(m_heroCandidateRank + 1))
+                    return;
+            }
+            populateFeaturedHeroFromLibrary();
+        },
+        Qt::UniqueConnection);
+
+    tankostream::stream::CatalogQuery q;
+    q.addonId = bestAddonId;
+    q.type = QStringLiteral("movie");
+    q.catalogId = bestCatalogId;
+    m_heroCatalog->load(q);
+    return true;
+}
+
+void StreamPage::populateFeaturedHeroFromLibrary()
+{
+    if (!m_featuredHero)
+        return;
+
+    // HARBOR_THEATRE_HOME 2026-06-15 — landscape-backdrops-ONLY rule kills the
+    // old library-poster fallback. StreamLibraryEntry carries only a PORTRAIT
+    // `poster` (no landscape `background` field), so every library item would
+    // be a stretched poster in the banner — exactly the low-quality/stretched
+    // look Hemanth asked us to drop. With no real landscape source available
+    // here, the fallback contributes ZERO slides and the hero stays hidden
+    // until the trending/popular catalog yields backdropped items. Fewer (or
+    // no) slides beats a stretched portrait.
+    m_featuredHero->hide();
 }
 
 namespace {
@@ -1392,18 +1660,59 @@ void StreamPage::buildBrowseLayer()
 
     m_scrollHome = new QWidget();
     m_scrollLayout = new QVBoxLayout(m_scrollHome);
-    m_scrollLayout->setContentsMargins(20, 0, 20, 20);
+    // HARBOR_THEATRE_HOME 2026-06-15 — full-bleed hero. The home scroll is
+    // currently hero-only (catalogue rows return in a follow-up and will carry
+    // their own per-row side padding, Stremio-style), so zero the side margins
+    // here and let the FeaturedHero span the full content width (was 20px side
+    // margins, which boxed the cinematic banner in). Bottom margin kept.
+    m_scrollLayout->setContentsMargins(0, 0, 0, 20);
     m_scrollLayout->setSpacing(24);
 
-    m_scrollLayout->addWidget(m_searchBarFrame);
+    // HARBOR_REDESIGN Theatre Content Home Phase A — featured hero carousel at
+    // the TOP of the home scroll (above the search bar / continue strip).
+    // Populated lazily in activate()/populateFeaturedHero(); hidden until it has
+    // at least one slide so the placeholder never flashes on an empty library.
+    m_featuredHero = new tankostream::stream::FeaturedHero(m_scrollHome);
+    m_featuredHero->hide();
+    connect(m_featuredHero, &tankostream::stream::FeaturedHero::itemActivated, this,
+        [this](const QString& imdb, const QString& type) {
+            // Reuse the existing catalog/search open-detail flow: build a minimal
+            // MetaItemPreview (id + type + title-less) and let the detail view
+            // fetch the rest. Mirrors StreamSearchWidget::metaActivated wiring.
+            tankostream::addon::MetaItemPreview preview;
+            preview.id   = imdb;
+            preview.type = type.isEmpty() ? QStringLiteral("movie") : type;
+            showDetail(preview);
+        });
+    m_scrollLayout->addWidget(m_featuredHero);
+
+    // HARBOR_THEATRE_HOME 2026-06-15 — gut the cluttered old home surface down
+    // to a clean Harbor-style hero. The in-home search bar, the Continue
+    // Watching strip, and the library grid are NO LONGER added to the visible
+    // home scroll. They are kept CONSTRUCTED + hidden (not deleted) so every
+    // existing member reference stays valid:
+    //   - m_searchInput backs the top CenterSearchBar's submitSearch() path
+    //     (onSearchSubmit reads m_searchInput->text()); the frame must keep it
+    //     alive, so we build m_searchBarFrame but never show it.
+    //   - m_continueStrip / m_libraryLayout are touched by activate(),
+    //     setStreamDownloadIndex(), and dev commands — they must exist.
+    // Catalogue rows return in a follow-up. The trailing addStretch() pins the
+    // hero to the top.
+    //
+    // m_searchBarFrame is parented to `this` (StreamPage) in buildSearchBar();
+    // NOT adding it to a layout would otherwise float it at (0,0) over the
+    // page, so hide it explicitly.
+    m_searchBarFrame->hide();
 
     // Home board: continue-watching strip + N catalog rows (Phase 3 Batch 3.2).
     // Phase 2 Batch 2.2 â€” m_metaAggregator plumbed through so the
     // StreamContinueStrip can resolve next-unwatched episodes for series
     // whose most-recent progress entry is finished.
+    // HARBOR_THEATRE_HOME 2026-06-15 — constructed (so m_continueStrip is a
+    // live pointer) but NOT added to the home scroll, and hidden.
     m_homeBoard = new tankostream::stream::StreamHomeBoard(
         m_bridge, m_library, m_addonRegistry, m_metaAggregator, m_scrollHome);
-    m_scrollLayout->addWidget(m_homeBoard);
+    m_homeBoard->hide();
 
     m_continueStrip = m_homeBoard->continueStrip();
     connect(m_continueStrip, &StreamContinueStrip::playRequested, this,
@@ -1441,11 +1750,18 @@ void StreamPage::buildBrowseLayer()
     m_homeBoard->refresh();
 
     // Library grid
+    // HARBOR_THEATRE_HOME 2026-06-15 — constructed + refreshed (so the
+    // pointer + its libraryChanged wiring stay live for dev commands and
+    // setStreamDownloadIndex) but NOT added to the home scroll, and hidden.
     m_libraryLayout = new StreamLibraryLayout(m_bridge, m_library, m_scrollHome);
     m_libraryLayout->refresh();
-    m_scrollLayout->addWidget(m_libraryLayout, 1);
+    m_libraryLayout->hide();
 
     connect(m_library, &StreamLibrary::libraryChanged, m_libraryLayout, &StreamLibraryLayout::refresh);
+
+    // HARBOR_THEATRE_HOME 2026-06-15 — pin the lone hero to the top of the
+    // scroll (catalogue rows arrive in a follow-up).
+    m_scrollLayout->addStretch(1);
 
     m_browseScroll->setWidget(m_scrollHome);
     layerLayout->addWidget(m_browseScroll, 1);
