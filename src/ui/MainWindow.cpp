@@ -14,6 +14,7 @@
 #include "pages/TankorentPage.h"
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
+#include "widgets/NavRail.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/queue/TransferQueue.h"
 #include "core/stream/StreamLibrary.h"
@@ -114,15 +115,67 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     m_glassBg = new GlassBackground(root);
     m_glassBg->lower();
 
-    // Content wrapper (topbar + page stack)
+    // Content wrapper.
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — the vertical
+    // "[top-pill bar] over [page stack]" layout is swapped for the Harbor shell:
+    //   [ slim chrome strip                                    ]   ← m_topBar (now the chrome strip)
+    //   [ NavRail | page stack (stretch=1)                     ]   ← rowLayout
+    // The chrome strip carries the relocated min/max/close window buttons + the
+    // library-action cluster; mode switching moves to the left NavRail. The
+    // page stack itself (buildPageStack / activatePage setCurrentIndex) is
+    // untouched — the rail is purely an alternate driver of activatePage().
     auto *content = new QFrame(root);
     content->setObjectName("Content");
     auto *contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     contentLayout->setSpacing(0);
 
-    buildTopBar();
+    // HARBOR_REDESIGN Phase 1 Task 4 — the left navigation rail, constructed
+    // BEFORE buildTopBar() so buildTopBar can populate its MODES group from the
+    // SAME navDefs the retired top pills used (setModes). The PAGES/COLLECTIONS
+    // groups are seeded by refreshNavRailPages() per active mode (driven from
+    // activatePage). itemActivated routes into the unchanged mode-switch contract.
+    m_navRail = new tankoban::ui::NavRail(content);
+    connect(m_navRail, &tankoban::ui::NavRail::itemActivated, this,
+            [this](const QString& id) {
+                // Brand-label "go home" → treat as activating the first mode.
+                if (id == QLatin1String("__home__")) {
+                    activatePage(PAGE_COMICS);
+                    return;
+                }
+                // COLLECTIONS: route the non-page actions to their existing
+                // handlers (no fabricated pages — Phase 1 only wires what
+                // already exists).
+                if (id == QLatin1String("__addfolder__")) {
+                    showRootFolders();
+                    return;
+                }
+                // Modes + existing sub-pages share the EXACT contract the top
+                // pills used (buildTopBar :566-591): resetMode, then same-page →
+                // resetActivePageToRoot, else activatePage.
+                if (m_navController) m_navController->resetMode(id);
+                if (id == m_activePageId) {
+                    resetActivePageToRoot();
+                } else {
+                    activatePage(id);
+                }
+            });
+    connect(m_navRail, &tankoban::ui::NavRail::collapseToggled, this, [](bool) {
+        // Width is driven by the rail's own QPropertyAnimation; the QHBoxLayout
+        // reflows the page stack automatically. Hook reserved for future
+        // chrome-strip search re-centering.
+    });
+
+    buildTopBar();                       // builds the slim chrome strip → m_topBar
+                                         // (also fills the rail's MODES group)
     contentLayout->addWidget(m_topBar);
+
+    // Row: [ NavRail | page stack ].
+    auto *contentRow = new QWidget(content);
+    auto *rowLayout = new QHBoxLayout(contentRow);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(0);
+    rowLayout->addWidget(m_navRail);
 
     // STREAM_DOWNLOADED_LIBRARY 2026-05-10 Phase 1 — persistent index of
     // bulk-downloaded episodes. Constructed BEFORE buildPageStack() so the
@@ -157,14 +210,26 @@ MainWindow::MainWindow(CoreBridge* bridge, QWidget *parent)
     migrateLegacyStreamProgressEntries();
 
     buildPageStack();
-    contentLayout->addWidget(m_pageStack, 1);
+    rowLayout->addWidget(m_pageStack, 1);
+    contentLayout->addWidget(contentRow, 1);
     DebugLogBuffer::instance().info("mainwindow", "5a-pagestack-added");
 
     rootLayout->addWidget(content, 1);
 
     m_sidebar = new SidebarDrawer(root);
     m_sidebar->hide();
-    connect(m_hamburgerBtn, &QPushButton::clicked, m_sidebar, &SidebarDrawer::toggle);
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — m_hamburgerBtn is
+    // repurposed from "toggle the sources drawer" to "collapse/expand the left
+    // NavRail" (the rail is now the primary nav surface). SidebarDrawer stays
+    // alive for the sources sub-pages (Tankorent / TankoLibrary) this phase —
+    // folding it into the rail is Phase 6 — but its only opener was the
+    // hamburger; reach it for now via the rail's COLLECTIONS sources entries or
+    // a later affordance.
+    if (m_hamburgerBtn && m_navRail) {
+        connect(m_hamburgerBtn, &QPushButton::clicked, this, [this]() {
+            if (m_navRail) m_navRail->setCollapsed(!m_navRail->isCollapsed());
+        });
+    }
     connect(m_sidebar, &SidebarDrawer::sourceClicked, this, [this](const QString& pageId) {
         activatePage(pageId);
         if (m_sidebar)
@@ -444,48 +509,43 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     }
 }
 
-// ── Top bar ─────────────────────────────────────────────────────────────────
+// ── Top chrome strip (HARBOR_REDESIGN Phase 1 Task 4, 2026-06-15, Agent 5) ──
+// The old centered top-pill bar is retired. buildTopBar() now builds a slim
+// WINDOW-CHROME strip — the draggable caption region carrying the relocated
+// min/max/close window buttons + the library-action cluster (collapse / back /
+// theme / organise / rescan / add-folder), with a centered placeholder gap
+// where the Task-5 CenterSearchBar will land. Mode switching moves entirely to
+// the left NavRail, whose MODES group is populated here from the SAME navDefs
+// the retired pills used (reused verbatim). m_topBar points at this strip so
+// the existing callers (resizeEvent geometry + WM_NCHITTEST caption check) keep
+// working against a single member; m_navGroup / m_brandLabel / m_topBarLeftSlot
+// / m_topBarRightSlot stay null (kept as members so legacy refs compile).
 void MainWindow::buildTopBar()
 {
     auto *bar = new QFrame(this);
-    bar->setObjectName("TopBar");
-    bar->setFixedHeight(56);
+    bar->setObjectName("ChromeStrip");
+    bar->setFixedHeight(44);
 
     auto *layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(14, 10, 14, 10);
-    layout->setSpacing(12);
+    layout->setContentsMargins(10, 6, 12, 6);
+    layout->setSpacing(8);
 
-    // ── Left slot (Brand label, left-aligned in a fixed-width container) ───
-    // FRAMELESS_CHROME_FIX 2026-05-01: structural counterweight. The right
-    // slot holds Theme + scan + add + chrome cluster, which is wider than
-    // the brand label alone. To keep nav horizontally centered on the
-    // window we wrap each side in its own slot and force leftSlot's width
-    // to mirror rightSlot's sizeHint() at the end of buildTopBar(). Robust
-    // to future button additions on either side — no magic numbers.
-    auto* leftSlot = new QWidget(bar);
-    m_topBarLeftSlot = leftSlot;
-    leftSlot->setObjectName("TopBarLeftSlot");
-    auto* leftLayout = new QHBoxLayout(leftSlot);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->setSpacing(0);
-
-    // SOURCES_SIDEBAR 2026-05-05 — hamburger button before brand label.
-    // Toggles the left slide-in drawer holding Tankorent /
-    // TankoLibrary. Sized to match IconButton precedent (28x24); not
-    // checkable, not part of m_navGroup (it's a toggle, not a content-mode peer).
-    m_hamburgerBtn = new QPushButton(leftSlot);
+    // ── Left cluster: rail-collapse toggle + Back chevron ──────────────────
+    // SOURCES_SIDEBAR 2026-05-05 hamburger is repurposed (Task 4): it now
+    // collapses/expands the NavRail (click connect lives in the ctor). Kept
+    // here so its member + tooltip live in one place.
+    m_hamburgerBtn = new QPushButton(bar);
     m_hamburgerBtn->setObjectName("HamburgerButton");
     m_hamburgerBtn->setFixedSize(28, 24);
     m_hamburgerBtn->setCursor(Qt::PointingHandCursor);
     m_hamburgerBtn->setIcon(QIcon(":/icons/hamburger.svg"));
     m_hamburgerBtn->setIconSize(QSize(16, 16));
-    m_hamburgerBtn->setToolTip("Open sidebar (Ctrl+5)");
+    m_hamburgerBtn->setToolTip("Collapse navigation (Ctrl+5)");
     m_hamburgerBtn->setFocusPolicy(Qt::NoFocus);
-    leftLayout->addWidget(m_hamburgerBtn, 0, Qt::AlignVCenter);
-    leftLayout->addSpacing(8);
+    layout->addWidget(m_hamburgerBtn, 0, Qt::AlignVCenter);
 
     // Global Back chevron (spec: docs/superpowers/specs/2026-05-14-global-nav-history-design.md §6)
-    m_backBtn = new QPushButton(leftSlot);
+    m_backBtn = new QPushButton(bar);
     m_backBtn->setObjectName("TopBarBackBtn");
     m_backBtn->setFixedSize(28, 24);
     m_backBtn->setCursor(Qt::PointingHandCursor);
@@ -496,42 +556,13 @@ void MainWindow::buildTopBar()
     m_backBtn->setAccessibleDescription("Navigate to the previous page. Keyboard: Alt+LeftArrow.");
     m_backBtn->setFocusPolicy(Qt::NoFocus);
     m_backBtn->setEnabled(false);  // initial: stack empty
-    leftLayout->addWidget(m_backBtn, 0, Qt::AlignVCenter);
+    layout->addWidget(m_backBtn, 0, Qt::AlignVCenter);
     connect(m_backBtn, &QPushButton::clicked,
             this, &MainWindow::onBackChevronClicked);
 
-    // Global Forward chevron
-    // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Forward chevron physically
-    // removed per spec piece B + matrix invariant. Hemanth verbatim: "nah
-    // fuck the front button, remove it. doesn't serve purpose with our new
-    // navigation style." Brand label shifts left ~42px to close the gap
-    // (spec B1, "Back chevron stays put, space collapses"). The Alt+Right
-    // shortcut + Qt::ForwardButton mouse handler are also removed below
-    // (spec B2 / B3 / B4 -- all unbound, no remap).
-
-    // Visual separator: bump the gap between Forward and Brand from
-    // the default 6px iconBtn spacing to ~12px to read as "nav cluster"
-    // vs "brand identity".
-    leftLayout->addSpacing(6);
-
-    m_brandLabel = new QLabel("Tankoban", leftSlot);
-    m_brandLabel->setObjectName("Brand");
-    leftLayout->addWidget(m_brandLabel);
-    leftLayout->addStretch(1);
-    layout->addWidget(leftSlot);
-
-    layout->addStretch(1);
-
-    // Nav button group inside its own frame
-    auto *nav = new QFrame(bar);
-    nav->setObjectName("TopNav");
-    auto *navLayout = new QHBoxLayout(nav);
-    navLayout->setContentsMargins(0, 0, 0, 0);
-    navLayout->setSpacing(6);
-
-    m_navGroup = new QButtonGroup(this);
-    m_navGroup->setExclusive(true);
-
+    // ── Populate the NavRail MODES group from the EXISTING navDefs ──────────
+    // Reused verbatim from the retired pill bar (no rename, no reorder): the
+    // loop below feeds them to the rail instead of building QPushButton pills.
     struct NavDef { const char *id; const char *label; };
     const NavDef navDefs[] = {
         // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — split the
@@ -539,7 +570,7 @@ void MainWindow::buildTopBar()
         // same legacy pageId "comics") then Comics (PAGE_WESTERN_COMICS, the
         // Western/RCO half). Order = Manga-then-Comics keeps PAGE_COMICS first so
         // Ctrl+1 + the boot default activatePage(PAGE_COMICS) stay on the manga
-        // library. The generic for-loop below wires both pills automatically.
+        // library.
         { PAGE_COMICS,         "Manga"  },
         { PAGE_WESTERN_COMICS, "Comics" },
         { PAGE_BOOKS,   "Books"   },
@@ -549,68 +580,40 @@ void MainWindow::buildTopBar()
         // power-user escape hatch.
         { PAGE_STREAM,  "Theatre" },
         // SOURCES_SIDEBAR 2026-05-05 — Sources entry removed; the two sub-pages
-        // (Tankorent / TankoLibrary) are now reachable via the
-        // hamburger-toggled left drawer.
+        // (Tankorent / TankoLibrary) are now reachable via the sidebar drawer.
     };
 
+    // Feed the modes to the rail (the rail is constructed before buildTopBar in
+    // the ctor). m_navButtons is left empty — activatePage syncs the rail's
+    // active id via setActiveId, not pill checked-state.
+    std::vector<tankoban::ui::NavRail::Item> modeItems;
+    modeItems.reserve(sizeof(navDefs) / sizeof(navDefs[0]));
     for (const auto &def : navDefs) {
-        auto *btn = new QPushButton(def.label, nav);
-        btn->setObjectName("TopNavButton");
-        btn->setCheckable(true);
-        btn->setCursor(Qt::PointingHandCursor);
-        navLayout->addWidget(btn);
-
-        m_navGroup->addButton(btn);
-
-        QString pageId = def.id;
-        connect(btn, &QPushButton::clicked, this, [this, pageId]() {
-            // PHASE 0 NAV CONTRACT RESTORE 2026-05-17 (Agent 5) — standing
-            // Tankoban contract (Tankoban Max -> Tankoban Max Butterfly ->
-            // Tankoban QT Groundworks -> Tankoban 2): mode pills are
-            // end-all-be-all hard resets. activatePage early-returns on
-            // pageId == m_activePageId, which silently swallows pill
-            // clicks while the user is in a deep sub-view (Comics search
-            // results, Comics series view, Stream detail, ...). Route the
-            // same-page case through resetActivePageToRoot so the pill
-            // ALWAYS returns the user to that mode's root home. The
-            // cross-mode case falls through to activatePage's normal
-            // page-swap path (whose own activate() handlers reset by
-            // construction for pages that need it).
-            // PHASE 1 NAV REDESIGN 2026-05-17 -- mode pill is end-all-be-all hard
-            // reset. resetMode wipes the target mode's per-mode stack to [] BEFORE
-            // we decide whether to dispatch to resetActivePageToRoot (same-page) or
-            // activatePage (cross-mode). Both branches benefit: same-page in-mode
-            // resets clear any stale layer entries; cross-mode jumps start the new
-            // mode from a clean stack.
-            if (m_navController) m_navController->resetMode(pageId);
-            if (pageId == m_activePageId) {
-                resetActivePageToRoot();
-            } else {
-                activatePage(pageId);
-            }
-        });
-
-        m_navButtons.append({ pageId, btn });
+        modeItems.push_back({ QString::fromLatin1(def.id),
+                              QString::fromLatin1(def.label),
+                              QString() });
     }
+    if (m_navRail) m_navRail->setModes(modeItems);
 
-    layout->addWidget(nav);
+    // ── Centered placeholder gap (Task 5 CenterSearchBar lands here) ────────
+    // Stretch on both sides keeps the future search window-centered regardless
+    // of how wide the chrome clusters grow.
+    layout->addStretch(1);
+    auto *searchPlaceholder = new QWidget(bar);
+    searchPlaceholder->setObjectName("CenterSearchSlot");
+    searchPlaceholder->setFixedHeight(28);
+    searchPlaceholder->setMinimumWidth(0);
+    layout->addWidget(searchPlaceholder, 0, Qt::AlignVCenter);
     layout->addStretch(1);
 
-    // Right slot wraps Theme + scan + add + chrome cluster so its sizeHint
-    // can be mirrored onto leftSlot's fixed width (see end of buildTopBar).
-    auto* rightSlot = new QWidget(bar);
-    m_topBarRightSlot = rightSlot;
-    rightSlot->setObjectName("TopBarRightSlot");
-    auto* rightLayout = new QHBoxLayout(rightSlot);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(12);
-
+    // ── Right cluster: library actions + window chrome (parented on the strip,
+    // added straight into the strip layout — no slot wrapper / no mirroring) ──
     // Theme picker (mode toggle): theme is app-appearance, scan/add are
     // library-data; group by intent per Hemanth 2026-04-25.
-    auto* themePicker = new ThemePicker(rightSlot);
-    rightLayout->addWidget(themePicker, 0, Qt::AlignVCenter);
+    auto* themePicker = new ThemePicker(bar);
+    layout->addWidget(themePicker, 0, Qt::AlignVCenter);
 
-    m_organiseBtn = new QPushButton(rightSlot);
+    m_organiseBtn = new QPushButton(bar);
     m_organiseBtn->setObjectName("IconButton");
     m_organiseBtn->setFixedSize(28, 24);
     m_organiseBtn->setIcon(QIcon(":/icons/organise.svg"));
@@ -625,10 +628,10 @@ void MainWindow::buildTopBar()
             m_organisePage->setShows(m_videosPage->currentShows());
         activatePage(PAGE_ORGANISE);
     });
-    rightLayout->addWidget(m_organiseBtn, 0, Qt::AlignVCenter);
+    layout->addWidget(m_organiseBtn, 0, Qt::AlignVCenter);
 
     // Rescan button
-    auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), rightSlot);
+    auto *scanBtn = new QPushButton(QString::fromUtf8("\u21BB"), bar);
     scanBtn->setObjectName("IconButton");
     scanBtn->setFixedSize(28, 24);
     scanBtn->setCursor(Qt::PointingHandCursor);
@@ -640,23 +643,25 @@ void MainWindow::buildTopBar()
         if (auto *b = m_pageStack->findChild<BooksPage*>())  b->activate();
         if (auto *v = m_pageStack->findChild<VideosPage*>()) v->triggerScan();
     });
-    rightLayout->addWidget(scanBtn, 0, Qt::AlignVCenter);
+    layout->addWidget(scanBtn, 0, Qt::AlignVCenter);
 
     // Add folder button (+)
-    auto *addBtn = new QPushButton("+", rightSlot);
+    auto *addBtn = new QPushButton("+", bar);
     addBtn->setObjectName("IconButton");
     addBtn->setFixedSize(28, 24);
     addBtn->setCursor(Qt::PointingHandCursor);
     addBtn->setToolTip("Add root folder");
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::showRootFolders);
-    rightLayout->addWidget(addBtn, 0, Qt::AlignVCenter);
+    layout->addWidget(addBtn, 0, Qt::AlignVCenter);
 
     // FRAMELESS_CHROME_FIX 2026-05-01: window-action cluster (min / max /
-    // close). 8-px gap separates library actions from window actions.
-    rightLayout->addSpacing(8);
-    auto makeChrome = [rightSlot](const char* objName, const QString& iconPath,
-                                  const QString& tip) {
-        auto* btn = new QPushButton(rightSlot);
+    // close), relocated into the chrome strip (Task 4). 8-px gap separates
+    // library actions from window actions. onChromeMaximizeToggle /
+    // updateMaxRestoreIcon wiring is unchanged.
+    layout->addSpacing(8);
+    auto makeChrome = [bar](const char* objName, const QString& iconPath,
+                            const QString& tip) {
+        auto* btn = new QPushButton(bar);
         btn->setObjectName(objName);
         btn->setFixedSize(36, 24);
         btn->setCursor(Qt::PointingHandCursor);
@@ -674,36 +679,12 @@ void MainWindow::buildTopBar()
     connect(m_chromeMax,   &QPushButton::clicked, this, &MainWindow::onChromeMaximizeToggle);
     connect(m_chromeClose, &QPushButton::clicked, this, &MainWindow::close);
 
-    rightLayout->addWidget(m_chromeMin,   0, Qt::AlignVCenter);
-    rightLayout->addWidget(m_chromeMax,   0, Qt::AlignVCenter);
-    rightLayout->addWidget(m_chromeClose, 0, Qt::AlignVCenter);
+    layout->addWidget(m_chromeMin,   0, Qt::AlignVCenter);
+    layout->addWidget(m_chromeMax,   0, Qt::AlignVCenter);
+    layout->addWidget(m_chromeClose, 0, Qt::AlignVCenter);
 
-    layout->addWidget(rightSlot);
-
-    // Width-mirror: leftSlot fixed to rightSlot's preferred width once
-    // child widgets have published their sizeHints (next event-loop tick).
-    // Re-runs on every activatePage() since right-slot content (Organise btn)
-    // changes visibility per page — without re-mirroring the central nav pills
-    // shift off-center when entering Videos/Organise mode.
-    QTimer::singleShot(0, this, [this]() { mirrorTopBarSlotWidths(); });
-
-    m_topBar = bar;
-}
-
-void MainWindow::mirrorTopBarSlotWidths()
-{
-    if (!m_topBarLeftSlot || !m_topBarRightSlot)
-        return;
-    // Both slots take the WIDER of the two sizeHints, so the central nav
-    // pills stay geometrically centered even after either side grows.
-    // GLOBAL_NAV_HISTORY Task 4 (2026-05-14) grew the left slot by ~76px
-    // when the Back / Forward chevrons landed, which previously would
-    // have clipped them under the right-mirror-only rule.
-    const int leftHint  = m_topBarLeftSlot->sizeHint().width();
-    const int rightHint = m_topBarRightSlot->sizeHint().width();
-    const int target    = qMax(leftHint, rightHint);
-    m_topBarLeftSlot->setFixedWidth(target);
-    m_topBarRightSlot->setFixedWidth(target);
+    m_chromeStrip = bar;
+    m_topBar = bar;  // legacy callers (resizeEvent / WM_NCHITTEST) read m_topBar
 }
 
 // ── Page stack ──────────────────────────────────────────────────────────────
@@ -1053,10 +1034,13 @@ void MainWindow::bindShortcuts()
     bind(QKeySequence("Ctrl+2"), PAGE_BOOKS);
     bind(QKeySequence("Ctrl+3"), PAGE_VIDEOS);
     bind(QKeySequence("Ctrl+4"), PAGE_STREAM);
-    auto* sidebarShortcut = new QShortcut(QKeySequence("Ctrl+5"), this);
-    connect(sidebarShortcut, &QShortcut::activated, this, [this]() {
-        if (m_sidebar)
-            m_sidebar->toggle();
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — Ctrl+5 repurposed
+    // from "toggle sources drawer" to "collapse/expand the NavRail" (mirrors the
+    // hamburger button's new role; the rail is the primary nav surface now).
+    auto* railCollapseShortcut = new QShortcut(QKeySequence("Ctrl+5"), this);
+    connect(railCollapseShortcut, &QShortcut::activated, this, [this]() {
+        if (m_navRail)
+            m_navRail->setCollapsed(!m_navRail->isCollapsed());
     });
 
     // F11 fullscreen toggle
@@ -1113,14 +1097,19 @@ void MainWindow::activatePage(const QString &pageId)
                     {QStringLiteral("previousPageId"), previousPageId}});
     if (m_navController) m_navController->setActiveMode(pageId);
 
-    for (auto &nav : m_navButtons) {
-        nav.button->setChecked(nav.pageId == pageId);
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — the centered pill
+    // bar is gone; the left NavRail is the nav surface. Sync its gold-active
+    // highlight to the new page (replaces the m_navButtons checked-state loop)
+    // and refresh the rail's PAGES group to the active mode's existing
+    // sub-pages. For sub-pages that are not themselves modes (e.g. a per-mode
+    // Downloads page) we still want the OWNING mode lit, so map the sub-page
+    // back to its mode id before highlighting.
+    if (m_navRail) {
+        m_navRail->setActiveId(pageId);
+        refreshNavRailPages(pageId);
     }
     if (m_organiseBtn)
         m_organiseBtn->setVisible(pageId == PAGE_VIDEOS || pageId == PAGE_ORGANISE);
-    // Right-slot width changes when Organise btn shows/hides — re-mirror
-    // leftSlot via the next event-loop tick so nav pills stay centered.
-    QTimer::singleShot(0, this, [this]() { mirrorTopBarSlotWidths(); });
 
     for (int i = 0; i < m_pageStack->count(); ++i) {
         if (m_pageStack->widget(i)->objectName() == pageId) {
@@ -1189,6 +1178,62 @@ void MainWindow::resetActivePageToRoot() {
     }
     // BooksPage / VideosPage / OrganisePage / TankorentPage / TankoLibraryPage:
     // no internal deep state today; pill-reset is a structural no-op.
+}
+
+// ── NavRail PAGES + COLLECTIONS (HARBOR_REDESIGN Phase 1 Task 4) ────────────
+// Populate the rail's middle (PAGES) + bottom (COLLECTIONS) groups for the
+// active mode. PHASE 1 SCOPE: surface ONLY sub-pages that ALREADY exist — the
+// per-mode Downloads page where one is built. No invented Home/Movies/Shows/
+// Trending entries (those are Phase 3). COLLECTIONS holds the mode-independent
+// "Add folder" action (routes to showRootFolders via the "__addfolder__"
+// sentinel handled in the ctor's itemActivated lambda). Called from activatePage
+// every switch so the groups track the current mode. A sub-page id (e.g.
+// "streamDownloads") is mapped back to its owning mode so the right PAGES set
+// shows even while the user is ON that sub-page.
+void MainWindow::refreshNavRailPages(const QString& pageId)
+{
+    if (!m_navRail) return;
+
+    // Map any sub-page back to its owning mode (so PAGES is consistent whether
+    // we're on the mode root or one of its sub-pages).
+    QString modeId = pageId;
+    if (pageId == QLatin1String(PAGE_COMICS_DOWNLOADS))  modeId = PAGE_COMICS;
+    else if (pageId == QLatin1String(PAGE_BOOKS_DOWNLOADS))   modeId = PAGE_BOOKS;
+    else if (pageId == QLatin1String(PAGE_STREAM_DOWNLOADS))  modeId = PAGE_STREAM;
+    else if (pageId == QLatin1String(PAGE_ORGANISE))          modeId = PAGE_VIDEOS;
+
+    using Item = tankoban::ui::NavRail::Item;
+    std::vector<Item> pages;
+
+    // Per-mode existing Downloads sub-page (the only reachable sub-page today).
+    // Western shares MangaPage's download store; the ComicsDownloadsPage is the
+    // manga/comics Downloads surface (keyed PAGE_COMICS_DOWNLOADS).
+    if (modeId == QLatin1String(PAGE_COMICS) && m_comicsDownloadsPage) {
+        pages.push_back({ QString::fromLatin1(PAGE_COMICS_DOWNLOADS),
+                          QStringLiteral("Downloads"),
+                          QStringLiteral(":/icons/download.svg") });
+    } else if (modeId == QLatin1String(PAGE_BOOKS) && m_booksDownloadsPage) {
+        pages.push_back({ QString::fromLatin1(PAGE_BOOKS_DOWNLOADS),
+                          QStringLiteral("Downloads"),
+                          QStringLiteral(":/icons/download.svg") });
+    } else if (modeId == QLatin1String(PAGE_STREAM) && m_streamDownloadsPage) {
+        pages.push_back({ QString::fromLatin1(PAGE_STREAM_DOWNLOADS),
+                          QStringLiteral("Downloads"),
+                          QStringLiteral(":/icons/download.svg") });
+    }
+    m_navRail->setPages(pages);
+
+    // COLLECTIONS (bottom group) — mode-independent. "Add folder" is the only
+    // trivially-wired existing action; routed through showRootFolders by the
+    // ctor lambda. (Settings has no standalone page yet — not fabricated here.)
+    std::vector<Item> collections;
+    collections.push_back({ QStringLiteral("__addfolder__"),
+                            QStringLiteral("Add folder"),
+                            QStringLiteral(":/icons/folder.svg") });
+    m_navRail->setCollections(collections);
+
+    // setPages/setCollections rebuild the rail; re-assert the active highlight.
+    m_navRail->setActiveId(pageId);
 }
 
 // ── Global Nav (GLOBAL_NAV_HISTORY Task 4) ──────────────────────────────────
@@ -1827,14 +1872,13 @@ QJsonObject MainWindow::devSnapshot() const
     snap["comicReaderVisible"] = m_comicReader && m_comicReader->isVisible();
     snap["bookReaderVisible"]  = m_bookReader && m_bookReader->isVisible();
 
-    QJsonArray nav;
-    for (const auto& nb : m_navButtons) {
-        QJsonObject o;
-        o["pageId"]  = nb.pageId;
-        o["checked"] = nb.button ? nb.button->isChecked() : false;
-        nav.append(o);
-    }
-    snap["navButtons"] = nav;
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — the pill bar is
+    // gone; surface the NavRail's live state for the dev bridge instead. The
+    // legacy "navButtons" key is kept (now empty: m_navButtons is unused) so any
+    // existing consumer doesn't NPE on a missing field.
+    snap["navButtons"] = QJsonArray{};
+    if (m_navRail)
+        snap["navRail"] = m_navRail->devSnapshot();
     return snap;
 }
 
@@ -2979,24 +3023,30 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         if (onTop)                   { *result = HTTOP;         return true; }
         if (onBottom)                { *result = HTBOTTOM;      return true; }
 
-        // Caption zone — empty regions of m_topBar become drag-handle.
+        // Caption zone — empty regions of the chrome strip become drag-handle.
+        // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — the centered
+        // top-pill bar is retired, so its old caption objectNames
+        // (m_brandLabel / "TopNav" / "TopBarLeftSlot" / "TopBarRightSlot") no
+        // longer exist as children of m_topBar. m_topBar now points at the slim
+        // chrome strip (objectName "ChromeStrip"); its draggable surfaces are
+        // (a) bare strip background (childAt → nullptr) and (b) the centered
+        // search placeholder ("CenterSearchSlot", an inert spacer until the
+        // Task-5 CenterSearchBar lands inside it). The strip itself is also
+        // whitelisted defensively in case childAt returns it directly. The
+        // actual buttons (Hamburger / Back / chrome min-max-close / icon
+        // buttons) sit on top and receive their own clicks because childAt
+        // returns the deepest visible child and lands on them. WITHOUT this
+        // update the window would not drag — verified as the #1 risk in Task 4.
         if (m_topBar) {
             const QPoint topbarPt = m_topBar->mapFrom(this, local);
             if (m_topBar->rect().contains(topbarPt)) {
                 QWidget* hit = m_topBar->childAt(topbarPt);
-                // Bare topbar, brand label, slot containers, and TopNav frame
-                // all pass through as caption (drag / double-click-max /
-                // right-click system menu work natively on these zones).
-                // Buttons and the actual nav button widgets sit on top and
-                // receive their own clicks because childAt returns the
-                // deepest visible child and lands on them directly.
                 const QString hitName = hit ? hit->objectName() : QString();
                 const bool isCaption =
                     !hit ||
-                    hit == m_brandLabel ||
-                    hitName == QLatin1String("TopNav") ||
-                    hitName == QLatin1String("TopBarLeftSlot") ||
-                    hitName == QLatin1String("TopBarRightSlot");
+                    hit == m_topBar ||
+                    hitName == QLatin1String("ChromeStrip") ||
+                    hitName == QLatin1String("CenterSearchSlot");
                 if (isCaption) {
                     *result = HTCAPTION;
                     return true;

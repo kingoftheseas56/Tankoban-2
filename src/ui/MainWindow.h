@@ -31,6 +31,7 @@ class SystemIntrospection;
 class SidebarDrawer;
 class StreamDownloadIndex;
 namespace tankoban::ui { class PerModeNavController; }
+namespace tankoban::ui { class NavRail; }
 namespace tankoban::ui { struct LayerEntry; }
 class QJsonObject;
 struct StreamBulkGroupRecord;
@@ -123,11 +124,12 @@ private:
     void buildTopBar();
     void buildPageStack();
     void bindShortcuts();
-    // Re-mirror m_topBarLeftSlot's fixed width to m_topBarRightSlot's
-    // current sizeHint. Called after right-slot content visibility changes
-    // (e.g. Organise button shown/hidden on page activation) to keep the
-    // central nav pills geometrically centered in the window.
-    void mirrorTopBarSlotWidths();
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — populate the left
+    // NavRail's PAGES group from the active mode's existing sub-pages (the
+    // per-mode Downloads page where one exists). Called on each activatePage so
+    // the rail's middle group tracks the current mode. Phase 1 surfaces only
+    // already-existing sub-pages; the invented Home/Movies/Shows live in Phase 3.
+    void refreshNavRailPages(const QString& pageId);
 
     // True when ComicReader / BookReader / VideoPlayer is open on top
     // of the page stack. Used by onBack/ForwardChevronClicked to route
@@ -300,12 +302,28 @@ private:
     bool m_wasMaximizedBeforeFullscreen = false;
 
     // Top bar
-    QWidget       *m_topBar      = nullptr;
-    QWidget       *m_topBarLeftSlot  = nullptr;  // brand + hamburger; width mirrors right slot
-    QWidget       *m_topBarRightSlot = nullptr;  // theme/scan/add/organise/chrome
-    QLabel        *m_brandLabel  = nullptr;
-    QButtonGroup  *m_navGroup    = nullptr;
-    QPushButton   *m_hamburgerBtn = nullptr;
+    // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — the centered
+    // top-pill bar (m_topBar / m_topBarLeftSlot / m_topBarRightSlot /
+    // m_brandLabel / m_navGroup) is retired. buildTopBar() now builds a slim
+    // top CHROME STRIP (m_chromeStrip) holding the relocated min/max/close
+    // window buttons + the library-action cluster (theme/scan/add/organise),
+    // with a centered placeholder gap where the Task-5 CenterSearchBar lands.
+    // Mode switching moves to m_navRail (left rail). m_topBar* + m_brandLabel +
+    // m_navGroup kept as members so legacy references compile; m_topBar now
+    // points at m_chromeStrip and the others stay null. m_hamburgerBtn is
+    // repurposed to toggle the rail's collapsed state.
+    QWidget       *m_topBar      = nullptr;       // == m_chromeStrip post-Harbor
+    QWidget       *m_chromeStrip = nullptr;       // slim top window-chrome strip
+    QWidget       *m_topBarLeftSlot  = nullptr;   // retired (kept null)
+    QWidget       *m_topBarRightSlot = nullptr;   // retired (kept null)
+    QLabel        *m_brandLabel  = nullptr;       // retired (brand now in NavRail)
+    QButtonGroup  *m_navGroup    = nullptr;       // retired (modes now in NavRail)
+    QPushButton   *m_hamburgerBtn = nullptr;      // repurposed → rail collapse
+
+    // HARBOR_REDESIGN Phase 1 Task 4 — the left navigation rail (modes + pages
+    // + collections). Drives the unchanged activatePage() contract; replaces
+    // the centered top-pill nav.
+    tankoban::ui::NavRail *m_navRail = nullptr;
 
     // Global Back navigation (PHASE 1 NAV REDESIGN 2026-05-17)
     tankoban::ui::PerModeNavController *m_navController = nullptr;
