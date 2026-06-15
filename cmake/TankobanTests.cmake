@@ -126,6 +126,10 @@ if(TANKOBAN_BUILD_TESTS)
         src/core/manga/mangaupdates/MangaUpdatesStatusParser.cpp
         src/core/manga/mangaupdates/MangaUpdatesDisambiguator.cpp
         src/ui/PerModeNavController.cpp
+        # Harbor design-token ladder test (HARBOR_REDESIGN Phase 1 Task 1).
+        # Theme.cpp is dep-free of libtorrent (Qt Core/Gui/Widgets/Svg only).
+        tests/ui/test_theme_tokens.cpp
+        src/ui/Theme.cpp
         # VolumeTile state tests (COMICS_CATALOG_SERIES_VIEW Phase 2 Task 8+9)
         tests/ui/test_volume_tile_state.cpp
         tests/ui/readers/test_comic_reader_pairing.cpp
@@ -153,7 +157,7 @@ if(TANKOBAN_BUILD_TESTS)
     target_compile_definitions(tankoban_tests PRIVATE
         TANKOBAN_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
     )
-    find_package(Qt6 REQUIRED COMPONENTS Test Network Widgets)
+    find_package(Qt6 REQUIRED COMPONENTS Test Network Widgets Svg)
     target_link_libraries(tankoban_tests PRIVATE
         GTest::gtest
         Qt6::Core
@@ -161,6 +165,7 @@ if(TANKOBAN_BUILD_TESTS)
         Qt6::Sql
         Qt6::Test
         Qt6::Widgets
+        Qt6::Svg
     )
     include(GoogleTest)
     # TANKOBAN_TESTS_QT_PATH_FIX 2026-05-17 — gtest_discover_tests runs the

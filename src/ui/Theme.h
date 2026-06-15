@@ -45,14 +45,34 @@ inline constexpr auto kText       = "#eeeeee";
 inline constexpr auto kMuted      = "rgba(238,238,238,0.58)";
 inline constexpr auto kBorder     = "rgba(255,255,255,0.10)";
 inline constexpr auto kBorderHi   = "rgba(255,255,255,0.16)";
-inline constexpr auto kAccent     = "#c7a76b";
-inline constexpr auto kAccentSoft = "rgba(199,167,107,0.22)";
-inline constexpr auto kAccentLine = "rgba(199,167,107,0.40)";
+// Harbor redesign (2026-06-15 Phase 1 Task 1): the single jewel accent flips
+// from the old desaturated tan #c7a76b to brand gold #e8b923. TileCard.cpp
+// reads kAccent literally for its hover/select border (load-bearing).
+inline constexpr auto kAccent     = "#e8b923";
+inline constexpr auto kAccentSoft = "rgba(232,185,35,0.22)";
+inline constexpr auto kAccentLine = "rgba(232,185,35,0.40)";
 
 inline QColor accentForSection(AppSection /*section*/)
 {
-    return QColor(0xc7, 0xa7, 0x6b);
+    return QColor(0xe8, 0xb9, 0x23);
 }
+
+// ── Harbor radius ladder (2026-06-15 Phase 1 Task 1) ───────────────────────────
+// Spec §3 radius ladder: 6 / 10 / 14 / 20 / 28 px + 999px pills. These are the
+// canonical corner radii for Harbor widgets (cards, pills, hero, nav buttons).
+inline constexpr int kRadXs   = 6;
+inline constexpr int kRadSm   = 10;
+inline constexpr int kRadMd   = 14;
+inline constexpr int kRadLg   = 20;
+inline constexpr int kRadXl   = 28;
+inline constexpr int kRadPill = 999;
+
+// ── Harbor ease curves (notes for Task 3 animation callers) ────────────────────
+// Eases are C++ constants for QPropertyAnimation::setEasingCurve callers (QSS
+// cannot consume them). No animation code lives in Task 1 — these are the
+// authoring notes for the NavRail collapse + hover animators in Task 3:
+//   kEaseOut  ~ cubic-bezier(0.16, 1, 0.3, 1)     -> QEasingCurve::OutQuint (closest builtin)
+//   kEasePull ~ cubic-bezier(0.32, 0.72, 0.24, 1) -> custom QEasingCurve via addCubicBezierSegment
 
 inline constexpr int kLibTopbarH  = 56;
 inline constexpr int kLibSideW    = 252;
@@ -72,16 +92,25 @@ enum class Mode { Dark, Nord, Solarized, Gruvbox, Catppuccin };
 // modes in noirStylesheet's templated form. buildStylesheet consumes this and
 // produces the final QSS string via __PLACEHOLDER__ substitution.
 struct ThemePalette {
-    QString bg0;          // app background (#050505 dark)
-    QString bg1;          // raised panels (#0a0a0a dark)
-    QString text;         // primary text (#eeeeee)
-    QString textDim;      // toast / secondary (#e0e0e0)
-    QString muted;        // muted text (rgba(238,238,238,0.58))
+    QString bg0;          // app background / canvas (Harbor oklch .18 #121317)
+    QString bg1;          // raised panels (Harbor oklch .32 #2d333f)
+    QString text;         // primary text (Harbor #f3f1ea)
+    QString textDim;      // toast / secondary (Harbor #cfd4dc)
+    QString muted;        // muted text (Harbor #aab1bd)
     QString border;       // hairline border (rgba(255,255,255,0.10))
     QString borderHover;  // hover border (rgba(255,255,255,0.16))
-    QString accent;       // primary accent (#c7a76b dark gold)
-    QString accentSoft;   // selection fill (rgba(199,167,107,0.22))
-    QString accentLine;   // focus border (rgba(199,167,107,0.40))
+    QString accent;       // primary accent (Harbor gold #e8b923)
+    QString accentSoft;   // selection fill (rgba(232,185,35,0.22))
+    QString accentLine;   // focus border (rgba(232,185,35,0.40))
+    // ── Harbor elevation ladder (2026-06-15 Phase 1 Task 1) ───────────────────
+    // OKLCH hue-260 low-chroma ladder baked to sRGB; bg0 is the canvas, then
+    // surface < elevated < raised ascend in lightness. onAccent = ink that sits
+    // on the gold accent; error = firewalled semantic red (never per-mode).
+    QString surface;      // surface oklch .22 (#1a1d24) — panels above canvas
+    QString elevated;     // elevated oklch .27 (#232833) — cards / popovers / pills
+    QString raised;       // raised oklch .32 (#2d333f) — hover rows / active nav fill
+    QString onAccent;     // text/ink on the gold accent (#14110a)
+    QString error;        // semantic error red (#e50914) — firewalled, never brand
     QString topbarBg;     // topbar surface (rgba(8,8,8,0.52))
     QString sidebarBg;    // sidebar surface (rgba(8,8,8,0.46))
     QString menuBg;       // menu / popover surface (rgba(8,8,8,0.88))
@@ -113,7 +142,12 @@ struct ThemeModeEntry {
 };
 
 inline constexpr std::array<ThemeModeEntry, 5> kModes = {{
-    {Mode::Dark,       "dark",       "Dark",       "#050505", "#0a0a0a", "#c7a76b", "199,167,107", "255,255,255"},
+    // Harbor (2026-06-15 Phase 1 Task 1): Dark resolves to the OKLCH ladder
+    // canvas/raised + brand gold accent. resolvePalette() overwrites
+    // bg0/bg1/accent/inkRgb from this row and derives accentSoft/accentLine from
+    // accentRgb, so the gold flip MUST live here too (not only in
+    // darkBaselineNoir()). bg0 = canvas oklch .18; bg1 = raised oklch .32.
+    {Mode::Dark,       "dark",       "Dark",       "#121317", "#2d333f", "#e8b923", "232,185,35",  "255,255,255"},
     {Mode::Nord,       "nord",       "Nord",       "#2e3440", "#3b4252", "#88c0d0", "136,192,208", "216,222,233"},
     {Mode::Solarized,  "solarized",  "Solarized",  "#002b36", "#073642", "#b58900", "181,137,0",   "192,207,207"},
     {Mode::Gruvbox,    "gruvbox",    "Gruvbox",    "#282828", "#3c3836", "#fe8019", "254,128,25",  "235,219,178"},

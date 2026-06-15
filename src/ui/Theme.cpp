@@ -81,22 +81,47 @@ bool s_proxyStyleInstalled = false;
 
 ThemePalette darkBaselineNoir()
 {
+    // ── Harbor dark ladder (2026-06-15 Phase 1 Task 1) ───────────────────────
+    // Spec §3: OKLCH hue-260, low-chroma elevation ladder, baked to sRGB hex
+    // (Qt QSS has no native OKLCH). Keep the OKLCH source here for future tuning:
+    //   bg0      oklch(.18 0.012 260)  -> #121317  (canvas)
+    //   surface  oklch(.22 0.014 260)  -> #1a1d24  (panels above canvas)
+    //   elevated oklch(.27 0.016 260)  -> #232833  (cards / popovers / pills)
+    //   raised   oklch(.32 0.018 260)  -> #2d333f  (hover rows / active nav fill)
+    //   text     oklch(.97)            -> #f3f1ea
+    //   textDim  oklch(.86)            -> #cfd4dc
+    //   muted    oklch(.72)            -> #aab1bd
+    //   accent   brand gold            -> #e8b923   onAccent ink -> #14110a
+    //   error    firewalled red        -> #e50914   (never per-mode)
+    // The legacy chrome slots (topbarBg/sidebarBg/menuBg/toastBg/cardBg) derive
+    // from the ladder surfaces at the existing alphas: surface 26/27/28 = (#1a1d24)
+    // -> rgb 26,29,36 ; elevated (#232833) -> rgb 35,40,51. kTemplate retint to
+    // the __SURFACE__/__ELEVATED__/__RAISED__ tokens lands in Task 2 — Task 1
+    // keeps the alpha conventions so the global look shift is verified in Task 4.
     ThemePalette p;
-    p.bg0         = QStringLiteral("#050505");
-    p.bg1         = QStringLiteral("#0a0a0a");
-    p.text        = QStringLiteral("#eeeeee");
-    p.textDim     = QStringLiteral("#e0e0e0");
-    p.muted       = QStringLiteral("rgba(238,238,238,0.58)");
+    p.bg0         = QStringLiteral("#121317");
+    p.bg1         = QStringLiteral("#2d333f");  // raised panels = top of ladder
+    p.surface     = QStringLiteral("#1a1d24");
+    p.elevated    = QStringLiteral("#232833");
+    p.raised      = QStringLiteral("#2d333f");
+    p.text        = QStringLiteral("#f3f1ea");
+    p.textDim     = QStringLiteral("#cfd4dc");
+    p.muted       = QStringLiteral("#aab1bd");
     p.border      = QStringLiteral("rgba(255,255,255,0.10)");
     p.borderHover = QStringLiteral("rgba(255,255,255,0.16)");
-    p.accent      = QStringLiteral("#c7a76b");
-    p.accentSoft  = QStringLiteral("rgba(199,167,107,0.22)");
-    p.accentLine  = QStringLiteral("rgba(199,167,107,0.40)");
-    p.topbarBg    = QStringLiteral("rgba(8,8,8,0.52)");
-    p.sidebarBg   = QStringLiteral("rgba(8,8,8,0.46)");
-    p.menuBg      = QStringLiteral("rgba(8,8,8,0.88)");
-    p.toastBg     = QStringLiteral("rgba(8,8,8,0.82)");
-    p.cardBg      = QStringLiteral("rgba(8,8,8,0.92)");
+    p.accent      = QStringLiteral("#e8b923");
+    p.accentSoft  = QStringLiteral("rgba(232,185,35,0.22)");
+    p.accentLine  = QStringLiteral("rgba(232,185,35,0.40)");
+    p.onAccent    = QStringLiteral("#14110a");
+    p.error       = QStringLiteral("#e50914");
+    // Chrome slots derived from the ladder at the existing surface alphas:
+    // topbar/sidebar = surface (#1a1d24 -> 26,29,36); menu/toast/card = elevated
+    // (#232833 -> 35,40,51). Alphas unchanged from the pre-Harbor noir values.
+    p.topbarBg    = QStringLiteral("rgba(26,29,36,0.52)");
+    p.sidebarBg   = QStringLiteral("rgba(26,29,36,0.46)");
+    p.menuBg      = QStringLiteral("rgba(35,40,51,0.88)");
+    p.toastBg     = QStringLiteral("rgba(35,40,51,0.82)");
+    p.cardBg      = QStringLiteral("rgba(35,40,51,0.92)");
     p.overlayDim  = QStringLiteral("rgba(0,0,0,180)");
     p.inkRgb      = QStringLiteral("255,255,255");
     return p;
@@ -925,6 +950,14 @@ QToolTip {
     tokens.insert(QStringLiteral("__CARD_BG__"),     palette.cardBg);
     tokens.insert(QStringLiteral("__OVERLAY_DIM__"), palette.overlayDim);
     tokens.insert(QStringLiteral("__INK_RGB__"),     palette.inkRgb);
+    // Harbor elevation-ladder tokens (2026-06-15 Phase 1 Task 1). Not yet
+    // referenced in kTemplate (the surface retint lands in Task 2) — registering
+    // them now is a harmless no-op replace until the QSS surfaces consume them.
+    tokens.insert(QStringLiteral("__SURFACE__"),     palette.surface);
+    tokens.insert(QStringLiteral("__ELEVATED__"),    palette.elevated);
+    tokens.insert(QStringLiteral("__RAISED__"),      palette.raised);
+    tokens.insert(QStringLiteral("__ON_ACCENT__"),   palette.onAccent);
+    tokens.insert(QStringLiteral("__ERROR__"),       palette.error);
 
     QString out = kTemplate;
     for (auto it = tokens.constBegin(); it != tokens.constEnd(); ++it) {
