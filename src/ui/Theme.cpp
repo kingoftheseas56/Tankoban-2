@@ -926,6 +926,51 @@ QPushButton#RootFoldersAddBtn:hover {
     border-color: __BORDER_HI__;
 }
 
+/* ── Harbor NavRail (left nav rail — Phase 1 Task 3) ── */
+
+QFrame#NavRail {
+    background: __SIDEBAR_BG__;
+    border-right: 1px solid __BORDER__;
+}
+
+/* Group buttons: transparent until hovered/active; gold ink + raised fill when
+   active. tintedSvgIcon already tints the glyph to text color; the active color
+   rule below recolors text and (in collapsed mode, label hidden) leaves the
+   gold accent reading as "icon gold only". */
+QPushButton#NavRailButton {
+    text-align: left;
+    background: transparent;
+    color: __TEXT__;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 12px;
+    min-height: 22px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#NavRailButton:hover {
+    background: __RAISED__;
+    color: __TEXT__;
+}
+
+QPushButton#NavRailButton[active="true"] {
+    color: __ACCENT__;
+    background: __RAISED__;
+    font-weight: 800;
+}
+
+/* Divider: a horizontal transparent → edge → transparent gradient hairline. */
+QFrame#NavDivider {
+    max-height: 1px;
+    min-height: 1px;
+    border: none;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 transparent,
+        stop:0.5 __BORDER_HI__,
+        stop:1 transparent);
+}
+
 /* ── Tooltips ── */
 
 QToolTip {
