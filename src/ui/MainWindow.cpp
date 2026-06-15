@@ -15,6 +15,7 @@
 #include "pages/TankoLibraryPage.h"
 #include "widgets/SidebarDrawer.h"
 #include "widgets/NavRail.h"
+#include "widgets/CenterSearchBar.h"
 #include "core/torrent/TorrentClient.h"
 #include "core/queue/TransferQueue.h"
 #include "core/stream/StreamLibrary.h"
@@ -42,6 +43,7 @@
 #include <QTimer>
 #include <QFrame>
 #include <QApplication>
+#include <QKeyEvent>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QButtonGroup>
@@ -77,6 +79,17 @@ static constexpr const char *PAGE_STREAM       = "stream";
 static constexpr const char *PAGE_TANKORENT    = "tankorent";
 static constexpr const char *PAGE_TANKOLIBRARY = "tankolibrary";
 static constexpr const char *PAGE_STREAM_DOWNLOADS = "streamDownloads";
+
+// HARBOR_REDESIGN Task 5 — user-facing mode label for the center-search
+// placeholder ("Search <label>…"). Mirrors the NavRail mode labels.
+static QString searchLabelForPage(const QString &pageId)
+{
+    if (pageId == QLatin1String(PAGE_COMICS))         return QStringLiteral("Manga");
+    if (pageId == QLatin1String(PAGE_WESTERN_COMICS)) return QStringLiteral("Comics");
+    if (pageId == QLatin1String(PAGE_BOOKS))          return QStringLiteral("Books");
+    if (pageId == QLatin1String(PAGE_STREAM))         return QStringLiteral("Theatre");
+    return QStringLiteral("Tankoban");
+}
 static constexpr const char *PAGE_COMICS_DOWNLOADS = "comicsDownloads";
 static constexpr const char *PAGE_BOOKS_DOWNLOADS = "booksDownloads";
 
@@ -563,7 +576,7 @@ void MainWindow::buildTopBar()
     // ── Populate the NavRail MODES group from the EXISTING navDefs ──────────
     // Reused verbatim from the retired pill bar (no rename, no reorder): the
     // loop below feeds them to the rail instead of building QPushButton pills.
-    struct NavDef { const char *id; const char *label; };
+    struct NavDef { const char *id; const char *label; const char *icon; };
     const NavDef navDefs[] = {
         // SIX_MODE_RESTRUCTURE Arc 1 STEP 2 (2026-06-14, Agent 1) — split the
         // old "Comics" pill into two: Manga (PAGE_COMICS, the Asian-manga half,
@@ -571,14 +584,14 @@ void MainWindow::buildTopBar()
         // Western/RCO half). Order = Manga-then-Comics keeps PAGE_COMICS first so
         // Ctrl+1 + the boot default activatePage(PAGE_COMICS) stay on the manga
         // library.
-        { PAGE_COMICS,         "Manga"  },
-        { PAGE_WESTERN_COMICS, "Comics" },
-        { PAGE_BOOKS,   "Books"   },
+        { PAGE_COMICS,         "Manga",  ":/icons/mode_manga.svg"  },
+        { PAGE_WESTERN_COMICS, "Comics", ":/icons/mode_comics.svg" },
+        { PAGE_BOOKS,   "Books",   ":/icons/mode_books.svg" },
         // TANKORENT_STREAM_INTEGRATION 2026-05-15 — Videos sidebar entry
         // removed; VideosPage stays linked for VideosScanner reuse by the
         // Theatre Local files row (Task E4). Ctrl+3 keybind preserved as a
         // power-user escape hatch.
-        { PAGE_STREAM,  "Theatre" },
+        { PAGE_STREAM,  "Theatre", ":/icons/mode_theatre.svg" },
         // SOURCES_SIDEBAR 2026-05-05 — Sources entry removed; the two sub-pages
         // (Tankorent / TankoLibrary) are now reachable via the sidebar drawer.
     };
@@ -591,7 +604,7 @@ void MainWindow::buildTopBar()
     for (const auto &def : navDefs) {
         modeItems.push_back({ QString::fromLatin1(def.id),
                               QString::fromLatin1(def.label),
-                              QString() });
+                              QString::fromLatin1(def.icon) });
     }
     if (m_navRail) m_navRail->setModes(modeItems);
 
@@ -599,11 +612,11 @@ void MainWindow::buildTopBar()
     // Stretch on both sides keeps the future search window-centered regardless
     // of how wide the chrome clusters grow.
     layout->addStretch(1);
-    auto *searchPlaceholder = new QWidget(bar);
-    searchPlaceholder->setObjectName("CenterSearchSlot");
-    searchPlaceholder->setFixedHeight(28);
-    searchPlaceholder->setMinimumWidth(0);
-    layout->addWidget(searchPlaceholder, 0, Qt::AlignVCenter);
+    m_centerSearch = new tankoban::ui::CenterSearchBar(bar);
+    m_centerSearch->setPlaceholder(searchLabelForPage(m_activePageId));
+    connect(m_centerSearch, &tankoban::ui::CenterSearchBar::searchSubmitted,
+            this, &MainWindow::routeCenterSearch);
+    layout->addWidget(m_centerSearch, 0, Qt::AlignVCenter);
     layout->addStretch(1);
 
     // ── Right cluster: library actions + window chrome (parented on the strip,
@@ -685,6 +698,45 @@ void MainWindow::buildTopBar()
 
     m_chromeStrip = bar;
     m_topBar = bar;  // legacy callers (resizeEvent / WM_NCHITTEST) read m_topBar
+}
+
+// HARBOR_REDESIGN Phase 1 Task 5 — route a center-search submit to the active
+// mode's own search entry. Each page exposes submitSearch() as a thin forwarder
+// to its existing search-submit path; empty/non-matching modes are a no-op.
+void MainWindow::routeCenterSearch(const QString &query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty())
+        return;
+    const QString &page = m_activePageId;
+    if (page == QLatin1String(PAGE_STREAM)) {
+        if (m_streamPage) m_streamPage->submitSearch(q);
+    } else if (page == QLatin1String(PAGE_COMICS)) {
+        if (auto *p = m_pageStack->findChild<MangaPage*>()) p->submitSearch(q);
+    } else if (page == QLatin1String(PAGE_WESTERN_COMICS)) {
+        if (auto *p = m_pageStack->findChild<WesternComicsPage*>()) p->submitSearch(q);
+    } else if (page == QLatin1String(PAGE_BOOKS)) {
+        if (auto *p = m_pageStack->findChild<BooksPage*>()) p->submitSearch(q);
+    }
+}
+
+// HARBOR_REDESIGN Phase 1 Task 5 — "/" and Ctrl+F focus the window-centered
+// search. Key events only reach MainWindow when no focused child (e.g. a
+// QLineEdit, or a page-level Ctrl+F QShortcut) consumed them first — so "/"
+// still types normally inside text inputs, and an existing per-page Ctrl+F
+// keeps working (we add global focus only where nothing else claims the key).
+void MainWindow::keyPressEvent(QKeyEvent *event)
+{
+    const bool slash = event->key() == Qt::Key_Slash
+                       && event->modifiers() == Qt::NoModifier;
+    const bool ctrlF = event->key() == Qt::Key_F
+                       && event->modifiers() == Qt::ControlModifier;
+    if ((slash || ctrlF) && m_centerSearch) {
+        m_centerSearch->focusSearch();
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
 }
 
 // ── Page stack ──────────────────────────────────────────────────────────────
@@ -1071,6 +1123,14 @@ void MainWindow::bindShortcuts()
     connect(backShortcut, &QShortcut::activated,
             this, &MainWindow::onBackChevronClicked);
 
+    // HARBOR_REDESIGN Task 5 — "/" and Ctrl+F both focus the window-centered
+    // search; BOTH are handled in keyPressEvent (NOT a QShortcut). A global
+    // Ctrl+F ApplicationShortcut would silence the existing per-page Ctrl+F
+    // (WindowShortcut) bindings on Manga/Books/Videos; routing through
+    // keyPressEvent instead lets a page-level Ctrl+F fire when present and
+    // falls back to the global search everywhere else — no override, no
+    // ambiguity. See MainWindow::keyPressEvent.
+
     // PHASE 1 NAV REDESIGN 2026-05-17 (Agent 5) -- Alt+Right shortcut
     // unbound per spec B2 ("Unbind cleanly -- does nothing"). Forward
     // chevron is physically gone; no remap to any other action.
@@ -1108,6 +1168,8 @@ void MainWindow::activatePage(const QString &pageId)
         m_navRail->setActiveId(pageId);
         refreshNavRailPages(pageId);
     }
+    if (m_centerSearch)
+        m_centerSearch->setPlaceholder(searchLabelForPage(pageId));
     if (m_organiseBtn)
         m_organiseBtn->setVisible(pageId == PAGE_VIDEOS || pageId == PAGE_ORGANISE);
 
@@ -1223,14 +1285,10 @@ void MainWindow::refreshNavRailPages(const QString& pageId)
     }
     m_navRail->setPages(pages);
 
-    // COLLECTIONS (bottom group) — mode-independent. "Add folder" is the only
-    // trivially-wired existing action; routed through showRootFolders by the
-    // ctor lambda. (Settings has no standalone page yet — not fabricated here.)
-    std::vector<Item> collections;
-    collections.push_back({ QStringLiteral("__addfolder__"),
-                            QStringLiteral("Add folder"),
-                            QStringLiteral(":/icons/folder.svg") });
-    m_navRail->setCollections(collections);
+    // COLLECTIONS (bottom group) — empty. Electron Sidebar footer is the collapse
+    // toggle ONLY (no add-folder, no profile). "Add folder" still lives as the +
+    // button in the top ChromeStrip, so dropping it here loses no capability.
+    m_navRail->setCollections(std::vector<Item>{});
 
     // setPages/setCollections rebuild the rail; re-assert the active highlight.
     m_navRail->setActiveId(pageId);
@@ -3029,9 +3087,10 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // (m_brandLabel / "TopNav" / "TopBarLeftSlot" / "TopBarRightSlot") no
         // longer exist as children of m_topBar. m_topBar now points at the slim
         // chrome strip (objectName "ChromeStrip"); its draggable surfaces are
-        // (a) bare strip background (childAt → nullptr) and (b) the centered
-        // search placeholder ("CenterSearchSlot", an inert spacer until the
-        // Task-5 CenterSearchBar lands inside it). The strip itself is also
+        // (a) bare strip background (childAt → nullptr) and the empty stretch
+        // regions either side of the centered search. The centered search
+        // itself ("CenterSearch" + children, Task 5) is deliberately NOT
+        // whitelisted so it receives clicks/focus. The strip itself is also
         // whitelisted defensively in case childAt returns it directly. The
         // actual buttons (Hamburger / Back / chrome min-max-close / icon
         // buttons) sit on top and receive their own clicks because childAt
@@ -3045,8 +3104,11 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
                 const bool isCaption =
                     !hit ||
                     hit == m_topBar ||
-                    hitName == QLatin1String("ChromeStrip") ||
-                    hitName == QLatin1String("CenterSearchSlot");
+                    hitName == QLatin1String("ChromeStrip");
+                // HARBOR_REDESIGN Task 5 — the centered search ("CenterSearch"
+                // + its children) is deliberately NOT caption, so clicks focus
+                // it. The strip's empty stretch regions (childAt → nullptr)
+                // stay draggable via the !hit branch above.
                 if (isCaption) {
                     *result = HTCAPTION;
                     return true;

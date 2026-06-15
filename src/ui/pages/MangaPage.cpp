@@ -3858,6 +3858,14 @@ void MangaPage::hideSearchHistoryDropdown()
     if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
 }
 
+void MangaPage::submitSearch(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty())
+        return;
+    showSearchMode(q);
+}
+
 void MangaPage::showSearchMode(const QString& query)
 {
     // Stream-bar parity 2026-05-22: this is the canonical submit funnel —

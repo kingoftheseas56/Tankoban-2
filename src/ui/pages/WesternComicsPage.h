@@ -72,6 +72,9 @@ public:
     // ── Page-shape contract (mirrors MangaPage) ──
     void activate();
     void resetToRoot();
+    // HARBOR_REDESIGN Task 5 — public entry for the window-centered search bar;
+    // forwards to this page's own search-submit path. Empty query is a no-op.
+    void submitSearch(const QString& query);
     // Public so MainWindow::closeComicReader can refresh the continue strip the
     // moment the reader returns to the library (mirrors MangaPage's precedent).
     void refreshContinueStrip();

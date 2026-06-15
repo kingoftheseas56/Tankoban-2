@@ -32,6 +32,7 @@ class SidebarDrawer;
 class StreamDownloadIndex;
 namespace tankoban::ui { class PerModeNavController; }
 namespace tankoban::ui { class NavRail; }
+namespace tankoban::ui { class CenterSearchBar; }
 namespace tankoban::ui { struct LayerEntry; }
 class QJsonObject;
 struct StreamBulkGroupRecord;
@@ -114,6 +115,10 @@ protected:
     void changeEvent(QEvent *event) override;
     // GLOBAL_NAV_HISTORY Task 5 — browser-style mouse thumb buttons (spec §3.6).
     void mousePressEvent(QMouseEvent* event) override;
+    // HARBOR_REDESIGN Task 5 — "/" focuses the window-centered search. Only
+    // bubbles here when no focused text input consumed it, so "/" still types
+    // normally inside line edits / search boxes.
+    void keyPressEvent(QKeyEvent* event) override;
     // GLOBAL_NAV_HISTORY Task 7 — gray chevrons while a modal dialog is open.
     bool eventFilter(QObject* watched, QEvent* event) override;
 #ifdef Q_OS_WIN
@@ -122,6 +127,9 @@ protected:
 
 private:
     void buildTopBar();
+    // HARBOR_REDESIGN Task 5 — route a center-search submit to the active
+    // mode's own search entry (each page exposes submitSearch).
+    void routeCenterSearch(const QString& query);
     void buildPageStack();
     void bindShortcuts();
     // HARBOR_REDESIGN Phase 1 Task 4 (2026-06-15, Agent 5) — populate the left
@@ -324,6 +332,10 @@ private:
     // + collections). Drives the unchanged activatePage() contract; replaces
     // the centered top-pill nav.
     tankoban::ui::NavRail *m_navRail = nullptr;
+
+    // HARBOR_REDESIGN Phase 1 Task 5 — the window-centered frosted search pill,
+    // lives in the chrome strip; routes submits to the active mode's search.
+    tankoban::ui::CenterSearchBar *m_centerSearch = nullptr;
 
     // Global Back navigation (PHASE 1 NAV REDESIGN 2026-05-17)
     tankoban::ui::PerModeNavController *m_navController = nullptr;

@@ -33,6 +33,7 @@ class QPushButton;
 class QLabel;
 class QToolButton;
 class QFrame;
+class QWidget;
 class QPropertyAnimation;
 class QEvent;
 
@@ -62,7 +63,14 @@ protected:
 
 private:
     void rebuild();
+    // Refill ONE group host (pages/collections) in place — no full rebuild, so a
+    // mode switch updates only that group and the rest of the rail stays still.
+    void fillGroup(QWidget* host, const std::vector<Item>& items);
     void applyCollapsedToButtons();
+    void buildModesGroup();          // expanded list vs collapsed single trigger
+    void showModeFlyout();           // collapsed: open the sideways mode picker
+    void closeModeFlyout();
+    QString activeModeIconPath() const;
 
     bool m_collapsed = false;
     QString m_activeId;
@@ -75,6 +83,15 @@ private:
     QFrame* m_divider = nullptr;
     QToolButton* m_collapseBtn = nullptr;
     QPropertyAnimation* m_widthAnim = nullptr;
+
+    // Stable per-group hosts so setPages/setCollections refill in place (mode
+    // switches don't tear down brand/modes/footer → the rail "remains still").
+    QWidget* m_pagesHost = nullptr;
+    QWidget* m_collectionsHost = nullptr;
+
+    // Collapsed MODE fold — single trigger button + sideways flyout popup.
+    QPushButton* m_modeTrigger = nullptr;   // collapsed: shows active mode icon (gold)
+    QWidget* m_modeFlyout = nullptr;        // Qt::Popup; null while closed
 };
 
 } // namespace tankoban::ui

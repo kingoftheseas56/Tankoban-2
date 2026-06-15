@@ -357,9 +357,11 @@ QScrollArea {
 
 QLabel#Brand {
     color: __TEXT__;
-    font-size: 14px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 27px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    padding-left: 6px;
 }
 
 /* ── Topbar: frosted glass strip ── */
@@ -925,7 +927,12 @@ QPushButton#RootFoldersAddBtn:hover {
     background: rgba(__INK_RGB__,0.10);
     border-color: __BORDER_HI__;
 }
-
+)qss"
+// MSVC caps a single string literal at 16380 bytes (C2026). The NavRail rework
+// pushed kTemplate past it, so the QSS is split into two adjacent raw literals
+// here — the compiler concatenates them into one literal before QStringLiteral
+// sees it, so this is a pure compile-time split with no runtime cost.
+R"qss(
 /* ── Harbor NavRail (left nav rail — Phase 1 Task 3) ── */
 
 QFrame#NavRail {
@@ -933,31 +940,68 @@ QFrame#NavRail {
     border-right: 1px solid __BORDER__;
 }
 
-/* Group buttons: transparent until hovered/active; gold ink + raised fill when
-   active. tintedSvgIcon already tints the glyph to text color; the active color
-   rule below recolors text and (in collapsed mode, label hidden) leaves the
-   gold accent reading as "icon gold only". */
-QPushButton#NavRailButton {
+/* Nav items — Electron Sidebar parity. 56px tall, radius 14, muted default,
+   left-aligned icon+label. The TREATMENT lives in the collapsed/active rules:
+
+     EXPANDED active  = subtle elevated background + ink label (icon gold).
+     EXPANDED hover   = ~50% elevated overlay.
+     COLLAPSED active = ONLY the icon turns gold (no pill, no ring); the gold
+                        comes from railIconAccent applied in C++ — here we just
+                        keep the background transparent + center the glyph.
+     COLLAPSED hover  = brighten label to text color (no fill).
+
+   tintedSvgIcon tints the glyph to text color; the active text color reads gold
+   in the expanded label, and railIconAccent paints the icon gold directly for
+   the collapsed trigger + current flyout pill. */
+QPushButton#NavRailButton, QPushButton#NavRailModeTrigger {
     text-align: left;
     background: transparent;
-    color: __TEXT__;
+    color: __MUTED__;
     border: none;
-    border-radius: 10px;
-    padding: 8px 12px;
-    min-height: 22px;
-    font-size: 12px;
-    font-weight: 600;
+    border-radius: 14px;
+    padding: 0 16px;
+    min-height: 56px;
+    max-height: 56px;
+    font-size: 16px;
+    font-weight: 500;
 }
 
 QPushButton#NavRailButton:hover {
-    background: __RAISED__;
+    background: rgba(__INK_RGB__,0.05);
     color: __TEXT__;
 }
 
 QPushButton#NavRailButton[active="true"] {
+    color: __TEXT__;
+    background: __ELEVATED__;
+    font-weight: 600;
+}
+
+/* Collapsed: center the glyph, no left padding. Active = icon-only gold (the
+   gold is in the icon itself); strip any background pill so the rail reads as a
+   clean icon strip. Hover merely brightens. */
+QPushButton#NavRailButton[collapsed="true"] {
+    text-align: center;
+    padding: 0;
+}
+QPushButton#NavRailButton[collapsed="true"]:hover {
+    background: transparent;
+    color: __TEXT__;
+}
+QPushButton#NavRailButton[collapsed="true"][active="true"] {
+    background: transparent;
     color: __ACCENT__;
-    background: __RAISED__;
-    font-weight: 800;
+}
+
+/* Collapsed MODE trigger — single button (active mode icon, gold). A faint hover
+   fill hints it's an interactive control vs a plain nav glyph. */
+QPushButton#NavRailModeTrigger {
+    text-align: center;
+    padding: 0;
+}
+QPushButton#NavRailModeTrigger:hover,
+QPushButton#NavRailModeTrigger[open="true"] {
+    background: rgba(__INK_RGB__,0.06);
 }
 
 /* Divider: a horizontal transparent → edge → transparent gradient hairline. */
@@ -970,6 +1014,74 @@ QFrame#NavDivider {
         stop:0.5 __BORDER_HI__,
         stop:1 transparent);
 }
+
+/* Collapsed MODE flyout — a frameless popup: clean horizontal bar of mode pills
+   anchored past the rail's right edge. Electron: bg --bg-elev, 1px hairline,
+   radius 14, drop shadow. The current mode reads as a filled gold pill. */
+QWidget#NavModeFlyout {
+    background: __ELEVATED__;
+    border: 1px solid __BORDER__;
+    border-radius: 14px;
+}
+
+QPushButton#NavModeFlyoutItem {
+    min-width: 46px;
+    max-width: 46px;
+    min-height: 46px;
+    max-height: 46px;
+    background: transparent;
+    color: __MUTED__;
+    border: none;
+    border-radius: 12px;
+}
+QPushButton#NavModeFlyoutItem:hover {
+    background: __SURFACE__;
+    color: __TEXT__;
+}
+QPushButton#NavModeFlyoutItem[active="true"],
+QPushButton#NavModeFlyoutItem[active="true"]:hover {
+    background: __ACCENT__;
+    color: __ON_ACCENT__;
+}
+
+/* ── Harbor center search (window-centered frosted pill — Phase 1 Task 5) ── */
+
+QFrame#CenterSearch {
+    background: __SURFACE__;
+    border: 1px solid __BORDER__;
+    border-radius: 15px;
+}
+
+QLineEdit#CenterSearchEdit {
+    background: transparent;
+    border: none;
+    color: __TEXT__;
+    font-size: 12px;
+    selection-background-color: __ACCENT_SOFT__;
+    selection-color: __TEXT__;
+}
+
+QLabel#SearchIcon { background: transparent; border: none; }
+
+QLabel#SearchHint {
+    color: __MUTED__;
+    background: rgba(__INK_RGB__,0.06);
+    border: 1px solid __BORDER__;
+    border-radius: 4px;
+    padding: 0px 5px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QToolButton#SearchClear {
+    background: transparent;
+    border: none;
+    color: __MUTED__;
+    font-size: 12px;
+    padding: 0px 2px;
+}
+
+QToolButton#SearchClear:hover { color: __TEXT__; }
 
 /* ── Tooltips ── */
 

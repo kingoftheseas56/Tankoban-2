@@ -87,6 +87,10 @@ public:
     // this to a shared IPageRoot interface for polymorphic dispatch.
     void resetToRoot();
 
+    // HARBOR_REDESIGN Task 5 — public entry for the window-centered search bar;
+    // forwards to this page's own search-submit path. Empty query is a no-op.
+    void submitSearch(const QString& query);
+
     // TANKOYOMI_PREMIUM Phase 3 -- MainWindow constructs TorrentClient AFTER
     // MangaPage (line ordering: pages first, then TorrentClient hoisted at
     // MainWindow scope post-SOURCES_SIDEBAR). Mirrors VideosPage's

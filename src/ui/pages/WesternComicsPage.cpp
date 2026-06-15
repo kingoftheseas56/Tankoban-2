@@ -599,6 +599,15 @@ void WesternComicsPage::hideSearchHistoryDropdown()
     if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
 }
 
+void WesternComicsPage::submitSearch(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty())
+        return;
+    ensureSearchTakeover();
+    showSearchMode(q);
+}
+
 void WesternComicsPage::showSearchMode(const QString& query)
 {
     // Canonical submit funnel (Enter / search-icon / history-row all route here),

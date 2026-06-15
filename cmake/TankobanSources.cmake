@@ -32,6 +32,7 @@ set(SOURCES
     src/ui/widgets/FadingStackedWidget.cpp
     src/ui/widgets/LibraryListView.cpp
     src/ui/widgets/NavRail.cpp
+    src/ui/widgets/CenterSearchBar.cpp
     src/ui/widgets/SidebarDrawer.cpp
     src/ui/widgets/Toast.cpp
     src/ui/widgets/ThemePicker.cpp
@@ -290,6 +291,7 @@ set(HEADERS
     src/ui/widgets/FadingStackedWidget.h
     src/ui/widgets/LibraryListView.h
     src/ui/widgets/NavRail.h
+    src/ui/widgets/CenterSearchBar.h
     src/ui/widgets/SidebarDrawer.h
     src/ui/widgets/Toast.h
     src/ui/pages/MangaPage.h

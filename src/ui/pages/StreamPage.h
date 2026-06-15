@@ -87,6 +87,10 @@ public:
     // Theatre topbar pill from any deep sub-view returns to Browse root.
     void resetToRoot();
 
+    // HARBOR_REDESIGN Task 5 — public entry for the window-centered search bar;
+    // forwards to this page's own search-submit path. Empty query is a no-op.
+    void submitSearch(const QString& query);
+
     // STREAM_DOWNLOADED_LIBRARY Phase 3 (2026-05-10) — wire the download
     // index into the home library board (chip rendering on tiles) and into
     // StreamLibrary (so remove() evicts per-episode entries).

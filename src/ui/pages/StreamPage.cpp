@@ -1468,6 +1468,19 @@ void StreamPage::buildBrowseLayer()
 
 // â”€â”€â”€ Search â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+void StreamPage::submitSearch(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty())
+        return;
+    // onSearchSubmit() reads m_searchInput unconditionally, so guard both
+    // together (m_searchInput is created in the ctor; this is belt-and-braces).
+    if (m_searchInput) {
+        m_searchInput->setText(q);
+        onSearchSubmit();
+    }
+}
+
 void StreamPage::onSearchSubmit()
 {
     QString query = m_searchInput->text().trimmed();

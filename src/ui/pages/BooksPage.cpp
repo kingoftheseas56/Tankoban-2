@@ -1495,6 +1495,14 @@ void BooksPage::hideSearchHistoryDropdown()
     if (m_searchHistoryDropdown) m_searchHistoryDropdown->hide();
 }
 
+void BooksPage::submitSearch(const QString& query)
+{
+    const QString q = query.trimmed();
+    if (q.isEmpty())
+        return;
+    showCatalogueSearchMode(q);
+}
+
 void BooksPage::showCatalogueSearchMode(const QString& query)
 {
     const QString trimmed = query.trimmed();

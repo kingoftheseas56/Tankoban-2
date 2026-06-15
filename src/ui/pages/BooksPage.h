@@ -72,6 +72,10 @@ public:
     // Downloads page). Loads + switches the internal stack to the series view.
     void openSeries(const QString& seriesId);
 
+    // HARBOR_REDESIGN Task 5 — public entry for the window-centered search bar;
+    // forwards to this page's own search-submit path. Empty query is a no-op.
+    void submitSearch(const QString& query);
+
 signals:
     void openBook(const QString& filePath);
     void enteredLayer(const tankoban::ui::LayerEntry& entry);

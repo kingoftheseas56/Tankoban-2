@@ -36,6 +36,10 @@
         <file>icons/chrome_close.svg</file>
         <file>icons/chevron_left.svg</file>
         <file>icons/chevron_right.svg</file>
+        <file>icons/mode_theatre.svg</file>
+        <file>icons/mode_manga.svg</file>
+        <file>icons/mode_comics.svg</file>
+        <file>icons/mode_books.svg</file>
         <file>icons/tankoban_app_icon.png</file>
         <file>icons/hamburger.svg</file>
         <file>icons/kebab-menu.svg</file>
