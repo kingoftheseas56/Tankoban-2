@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QFontDatabase>
 #include <QHash>
 #include <QIcon>
 #include <QIODevice>
@@ -11,6 +12,7 @@
 #include <QProxyStyle>
 #include <QSettings>
 #include <QString>
+#include <QStringList>
 #include <QStringLiteral>
 #include <QStyleFactory>
 #include <QStyleOption>
@@ -323,7 +325,14 @@ QString buildStylesheet(const ThemePalette& palette)
 /* ── Base: glass transparency ── */
 
 * {
-    font-family: "Segoe UI Variable", "Segoe UI", "Inter", sans-serif;
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", sans-serif;
+}
+
+/* ── Harbor display family (Phase 1 Task 2) ──
+   Brand / section / hero titles use the Fraunces serif display face; the rest
+   of the UI stays on the Inter body family above. Applied by objectName. */
+QLabel#Brand, QLabel#SectionTitle, QLabel#HeroTitle {
+    font-family: "Fraunces", Georgia, serif;
 }
 
 QWidget {
@@ -1012,6 +1021,37 @@ void applyTheme(QApplication& app, Mode mode)
 void applyThemeFromSettings(QApplication& app)
 {
     applyTheme(app, loadMode());
+}
+
+// ── registerFonts ────────────────────────────────────────────────────────────
+// Load the bundled Harbor typefaces from the Qt resource system so the QSS
+// font-family rules ("Inter" body / "Fraunces" display) resolve to the
+// embedded fonts. Called once from main() BEFORE applyThemeFromSettings().
+// QFontDatabase::addApplicationFont returns the font id (>= 0) on success or
+// -1 on failure; we surface both the id and the resolved family names so a
+// missing/renamed resource shows up loudly in the boot log instead of silently
+// falling through to the Segoe/serif fallbacks. (Harbor Phase 1 Task 2.)
+void registerFonts()
+{
+    struct FontSpec { const char* path; const char* expectFamily; };
+    static const FontSpec specs[] = {
+        {":/fonts/Inter-VariableFont.ttf",    "Inter"},
+        {":/fonts/Fraunces-VariableFont.ttf", "Fraunces"},
+    };
+    for (const auto& spec : specs) {
+        const int id = QFontDatabase::addApplicationFont(
+            QString::fromLatin1(spec.path));
+        if (id < 0) {
+            qWarning("Theme::registerFonts: FAILED to load %s (addApplicationFont returned -1)",
+                     spec.path);
+            continue;
+        }
+        const QStringList families = QFontDatabase::applicationFontFamilies(id);
+        qInfo("Theme::registerFonts: loaded %s id=%d families=[%s] (expect \"%s\")",
+              spec.path, id,
+              qUtf8Printable(families.join(QStringLiteral(", "))),
+              spec.expectFamily);
+    }
 }
 
 const ThemePalette& current()

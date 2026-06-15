@@ -169,6 +169,13 @@ void applyTheme(QApplication& app, Mode mode);
 // Read mode from QSettings (defaults Dark if unset) and apply.
 void applyThemeFromSettings(QApplication& app);
 
+// Register the bundled Harbor display + body typefaces (Fraunces / Inter)
+// with QFontDatabase from the Qt resource system. Must run BEFORE
+// applyThemeFromSettings() so the QSS font-family rules resolve to the
+// embedded families ("Inter" body / "Fraunces" display) rather than
+// falling through to the Segoe/serif fallbacks. (Harbor Phase 1 Task 2.)
+void registerFonts();
+
 // Active palette accessor — useful for code that wants to introspect the
 // current accent color etc. without re-running resolvePalette.
 const ThemePalette& current();

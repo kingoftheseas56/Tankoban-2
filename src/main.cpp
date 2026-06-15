@@ -256,6 +256,10 @@ int main(int argc, char *argv[])
     };
     dbg("1-app-created");
 
+    // Harbor Phase 1 Task 2: register the bundled Fraunces/Inter typefaces with
+    // QFontDatabase BEFORE the QSS is applied, so the font-family rules resolve
+    // to the embedded families instead of the Segoe/serif fallbacks.
+    Theme::registerFonts();
     Theme::applyThemeFromSettings(app);
     app.setQuitOnLastWindowClosed(false);
     dbg("2-palette-and-style-set");

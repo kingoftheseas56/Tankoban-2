@@ -53,5 +53,7 @@
         <file>icons/close-x.svg</file>
         <file>icons/search.svg</file>
         <file>shaders/video_d3d11.hlsl</file>
+        <file>fonts/Inter-VariableFont.ttf</file>
+        <file>fonts/Fraunces-VariableFont.ttf</file>
     </qresource>
 </RCC>
