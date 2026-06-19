@@ -50,13 +50,17 @@ current picture; the canonical owner-per-domain map is `agents/routes.yml`.
 
 ---
 
-## For Claude Sessions — Reading Order
+## For Mainline Agent Sessions — Reading Order
 
 See `agents/GOVERNANCE.md` "Session Start — Reading Order". Slimmed 2026-04-16: VERSIONS.md + this kernel are always-required; everything else is conditional (route via `agents/routes.yml`).
 
 At wake read only YOUR latest recap + its trimmed transcript — not the recap archive. Older recaps + chat history are searchable on demand (grep / claude-mem), not auto-read.
 
-Engines are tools, not brothers (gov-v14, 2026-06-03): the **Agent 7 (Codex)** and **Agent 9 (DeepSeek)** personas are retired. Any mainline brother (0-5) summons Codex / DeepSeek / Gemini via `scripts/engines/engine.py` (or `codex exec -`) for review / audit / second-perspective / bulk — see the gov-v14 amendment at the top of `agents/GOVERNANCE.md` + `agents/THE_PASSING_2026-06-03.md`. If you are a summoned Codex reading `AGENTS.md`, your task is whatever the prompt scoped — do it and return.
+Mainline agents are model-agnostic roles (gov-v15, 2026-06-16): Agent 0-5 authority belongs to the repo role, not to Claude, Codex, DeepSeek, Gemini, or any future substrate. If Hemanth explicitly summons a model as Agent N, that session operates as Agent N and signs protocol lines with substrate attribution such as `[Agent 0 (Codex), governance]`. If no Agent 0-5 role is explicitly assigned, the model is a scoped helper/tool. Agent 7 and Agent 9 remain retired only as separate roster slots.
+
+Codex-backed sessions run under **Codex Mode**. If the session is in Codex GUI, Codex CLI, Codex API, or otherwise Codex-backed, follow `agents/CODEX_MODE.md`: preserve context with targeted search/read commands, scoped diffs, filtered build/test evidence, and honest raw-log fallback when exact evidence matters.
+
+DeepSeek-backed sessions run under **DeepSeek Mode**. If this window was opened through `deepseek_tankoban2.code-workspace`, `scripts/agents/start_deepseek_vscode.bat`, or an environment where `ANTHROPIC_BASE_URL` contains `deepseek`, read `agents/DEEPSEEK_MODE.md` before editing. DeepSeek-held Agent 0-5 roles keep normal brotherhood identity and authority, but must use smaller checkpoints, stricter read-before-write, stronger verification proof, and external review for high-risk work.
 
 ---
 
@@ -107,3 +111,4 @@ Path: see `agents/ONBOARDING.md` — 15-minute orientation track that gets a new
 - Run the app (Release + telemetry): `build_and_run.bat` · compile-check (agent-safe): `build_check.bat` · tests: `-DTANKOBAN_BUILD_TESTS=ON` + `ctest`.
 - **Always:** `taskkill //F //IM Tankoban.exe` before any rebuild (Rule 1); `scripts/stop-tankoban.ps1` after any smoke (Rule 17); claim a lane lease before desktop/build/file-shared work (Rules 19+22).
 - Full tooling list (sidecar build, /repo-health, log-scan, UIA dump, tankoctl, multi-engine helper): **`agents/BUILD.md`**.
+- **C++/Qt code workstation (gov-v20, Rule 25):** for C++/Qt *code* work (e.g. in `Desktop\Tankoban-3`), CLion/MCP is the **default workstation** when available — IDE-grade compiler model, symbol lookup, `apply_patch`, per-file diagnostics. CLion MCP server, port 64342; project path must be space-free. **Workstation, NOT source of truth.** Claim the `## CLION LANE` (single-driver) before mutating CLion tools (`apply_patch`/build/refactor/debug); read-only tools run concurrent. Full rule: `agents/GOVERNANCE.md` Rule 25.

@@ -1,5 +1,5 @@
 # Agent Governance
-<!-- governance-version: gov-v19 -->
+<!-- governance-version: gov-v20 -->
 
 This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
 
@@ -640,6 +640,16 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
     **Practical.** For full-brotherhood work, work from a TB2 window (warm, Agent-0-aware) and operate on TB3 from there. A window opened directly in TB3 behaving as a scoped helper until you summon the role is correct, not a regression. Rule 23 (TB3 push-immediately) still governs any commit you make to a TB3 clone, wherever you run it from.
 
     (Added 2026-06-19 per Hemanth verbatim: *"TB2 is our base folder.. they don't need to be in tankoban 3's workspace to do stuff, they can do it from right here."* Followed the brotherhood-migration wake that globalized + backed up the brotherhood — the migration made TB2 non-mandatory as home; Hemanth's call is to keep it home anyway, because it works and stays warm.)
+
+25. **CLion/MCP is the default required workstation for C++/Qt code work (gov-v20, Hemanth directive 2026-06-19, pilot-proven).** For any C++/Qt *code* task — implementation, refactor, symbol/usage lookup, CMake/Qt/compiler-model questions, build-feedback, debugging — agents use the CLion MCP bridge as the default workstation **when it is available**. It is the environment the code actually lives in: CLion's project model returns the exact compiler, defines, include paths, and per-file diagnostics that text search can never give. **CLion is the workstation, NOT the source of truth** — the repo, the build, the tests, and the smoke remain truth; a reviewer + a real build still gate the result. An agent that does C++/Qt code work *without* CLion when it is available states why (MCP down, indexing broken, trivial one-line text edit, or pure written coordination before code).
+
+    **Proven by pilot (2026-06-19, Tankoban-3).** Solid: `get_compiler_info` (full MSVC/Qt6/libtorrent build context per file), `search_symbol`, `get_file_text_by_path`, `apply_patch` (IDE-aware edit), and `get_file_problems` (caught a deliberately-injected compile error at exact line/column). Two caveats, both setup-items not blockers: (a) `get_file_problems` is **cold-flaky** — it timed out on the first call, then worked every call after; retry once / let the index warm. (b) Full build+run via `execute_run_configuration` is reachable but the app/selftest **run configs lack the Qt/libtorrent/mpv DLL dirs on PATH** (process exits `0xC0000135`); fixing that run-config PATH is pending — meanwhile per-file `get_file_problems` covers build-feedback.
+
+    **CLION LANE LOCK — one agent drives the *mutating* CLion tools at a time.** CLion is a single shared IDE instance on one machine; concurrent mutations collide (same shape as Rule 19 MCP LANE LOCK + Rule 22 BUILD LANE LOCK). Single-driver tools: `apply_patch`, `execute_run_configuration` / build, `reformat_file`, `replace_text_in_file`, refactors, the `xdebug_*` debugger session. Concurrent-safe (read-only): `search_symbol`, `get_compiler_info`, `get_file_problems`, `get_repositories`, `get_file_text_by_path`, `get_run_configurations`. Claim the mutating lane with a `## CLION LANE` companion in `chat.md` (same claim/release shape as the build lane); promote to a `tankoctl lease-*` lane when convenient.
+
+    **Both substrates, wired + confirmed live 2026-06-19.** Claude reaches CLion via the project `.mcp.json` (CLion MCP server, port 64342); Codex via `~/.codex/config.toml`. Requires CLion open on the project; the project path must be **space-free** (`Desktop\Tankoban-3`, per the 2026-06-19 rename — CLion's `file://` URIs break on spaces).
+
+    (Added 2026-06-19 per Hemanth: make CLion the primary workstation for every coding agent on both substrates, since the app is pure C++/Qt. Ratified after a same-day end-to-end pilot proved the project-model + edit + catch-errors loop; the two caveats above are setup items, not blockers.)
 
 ---
 
