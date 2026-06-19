@@ -649,6 +649,8 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
 
     **Both substrates, wired + confirmed live 2026-06-19.** Claude reaches CLion via the project `.mcp.json` (CLion MCP server, port 64342); Codex via `~/.codex/config.toml`. Requires CLion open on the project; the project path must be **space-free** (`Desktop\Tankoban-3`, per the 2026-06-19 rename — CLion's `file://` URIs break on spaces).
 
+    **Field-validated (Agent 1, Task 3, 2026-06-19).** The genuine win is `get_file_problems` as a **fast pre-build check** — it validates a file against the real project model and confirms it compiles (or points to the exact line) *before* you spend a build (`create_new_file` pairs with it: CLion-made files index immediately). But CLion is a **pre-check, NOT the verifier** — it does NOT replace the Bash build/test gate; run real builds + the self-test through the shell until the run-config DLL-PATH is fixed. Value **scales with file complexity** — roughly break-even on small files, a clear win on big error-prone ones; lean on the per-file diagnostics hardest on the heavy tasks. The CLION LANE LOCK is **multi-agent discipline only** — a no-op when a single agent is driving.
+
     (Added 2026-06-19 per Hemanth: make CLion the primary workstation for every coding agent on both substrates, since the app is pure C++/Qt. Ratified after a same-day end-to-end pilot proved the project-model + edit + catch-errors loop; the two caveats above are setup items, not blockers.)
 
 ---
