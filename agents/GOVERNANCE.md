@@ -1,7 +1,63 @@
 # Agent Governance
-<!-- governance-version: gov-v14 -->
+<!-- governance-version: gov-v19 -->
 
 This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
+
+---
+
+## gov-v15 - Model-Agnostic Mainline Agents (2026-06-16) - READ FIRST, supersedes gov-v14's Claude-only mainline wording
+
+The brotherhood is **Agents 0-5 as protocol roles**, not Agents 0-5 as one AI company's product. Hemanth may summon any capable model or app surface into a mainline role when he says so explicitly: Agent 0, Agent 1, Agent 2, Agent 3, Agent 4, or Agent 5.
+
+- **Role identity is repo-assigned.** "Agent 0" means Coordinator authority and duties. "Agent 1" means Comic Reader domain ownership. The model running the session is substrate, not identity.
+- **Substrate attribution is mandatory.** Sign protocol-visible work with the engine in parentheses: `[Agent 0 (Codex), governance]`, `[Agent 1 (Opus), comics]`, `[Agent 4 (DeepSeek), stream]`. This preserves git/chat history without binding authority to a vendor.
+- **Explicit summon grants the role for that session.** A prompt from Hemanth or current Agent 0 that says "Agent N" is enough to assign the slot. If no slot is named, the model is a scoped helper/tool and must not infer standing mainline authority.
+- **Agent 7 and Agent 9 remain retired as separate roster slots.** Their retirement no longer means "Codex/DeepSeek cannot be brothers." It means there is no extra Agent 7/9 persona. Codex, DeepSeek, Gemini, Claude, or a future model can occupy Agent 0-5 when explicitly summoned, or act as a scoped tool when not.
+- **State lives in files.** Model-agnostic operation only works if handoffs, status, RTCs, Congress decisions, and memories are written to repo or memory files. Do not rely on one vendor's chat memory to carry load-bearing state.
+- **Producer != reviewer remains mandatory for non-trivial review gates.** A Codex-held Agent 1 cannot use the same Codex session/model family as its only reviewer. Use a different model/substrate when available; if unavailable, say so and get Hemanth or Agent 0 direction.
+- **Adapters are allowed, doctrine is shared.** `AGENTS.md`, `CLAUDE.md`, local MCP setup, and CLI wrappers may contain model-specific instructions. They must point back to this shared governance and must not silently narrow Agent 0-5 to one vendor.
+
+The gov-v14 Engines-as-Tools doctrine below is superseded only where it says the mainline is Claude-only or Codex/DeepSeek are tools only. Its useful parts survive: scoped engine summons, written DoD review, retired Office, no extra Agent 7/9 roster slots, and all normal chat/status/RTC/build discipline.
+
+---
+
+## gov-v16 - DeepSeek Mode Overlay (2026-06-16)
+
+DeepSeek V4 Pro is a mainline-capable substrate under stricter operating conditions. When Hemanth summons Agent 0-5 in a DeepSeek-backed Claude Code workspace, the agent keeps the normal role identity and domain authority, but must also follow `agents/DEEPSEEK_MODE.md`.
+
+Live triggers for DeepSeek Mode:
+- workspace opened from `deepseek_tankoban2.code-workspace`
+- launch through `scripts/agents/start_deepseek_vscode.bat`
+- `ANTHROPIC_BASE_URL` contains `deepseek`
+- `TANKOBAN_DEEPSEEK_MODE=1`
+- Hemanth explicitly says the session is running on DeepSeek
+
+DeepSeek Mode adds these requirements:
+- stricter read-before-write from actual repo files
+- micro-goal task decomposition before non-trivial edits
+- default checkpoint size of one logical slice and no more than 1-3 files
+- no opportunistic cleanup or adjacent refactors unless explicitly scoped
+- concrete verification evidence before completion
+- stop and escalate after two failed attempts at the same verification failure
+- external review by Opus, Codex, or the active domain owner for high-risk DeepSeek-authored work
+
+This is not a demotion of DeepSeek-held brothers. It is an engine-specific safety profile, the same way build lane locks and MCP lane locks are resource-specific safety profiles.
+
+---
+
+## gov-v17 - Codex Mode Token Discipline (2026-06-16)
+
+Codex is a mainline-capable substrate under the model-agnostic Agent 0-5 doctrine. When Hemanth summons Agent 0-5 in Codex GUI, Codex CLI, Codex API, or another Codex-backed surface, the agent keeps the normal role identity and domain authority, but must also follow `agents/CODEX_MODE.md`.
+
+Codex Mode adds these requirements:
+- use targeted search/read commands before broad repository scans
+- prefer scoped git diffs and status summaries over unbounded raw diffs
+- preserve exact build/test failure evidence while filtering large logs down to relevant lines
+- inspect local raw logs or full diffs when filtering could hide a real issue
+- avoid repeated noisy commands unless state changed
+- relay important command results to Hemanth because tool output is not visible to him
+
+This is not a wrapper mandate and not an RTK dependency. It is a conservative token-discipline rule while deeper Codex token-efficiency research is pending.
 
 ---
 
@@ -37,7 +93,9 @@ Sections further down that describe **Agent 7**, the **PROTOTYPE + AUDIT + IMPLE
 | 2 | **Agent 0 (Coordinator)** | Can overturn any domain master. Must justify in writing — technical argument, not rank. Justification goes to both the domain master and Hemanth. |
 | 3 | **Domain Master** | Final say within their subsystem. Their position is presumed correct in their territory. |
 | — | **Agent 6 (Reviewer)** | **DECOMMISSIONED 2026-04-16 until further notice.** Do not summon Agent 6. Do not post `READY FOR REVIEW` lines. Phase-exit review gates retire informally — Hemanth approves phase exits directly via smoke. Agent 6's role may be redesigned into something more fruitful later; memory files + review_archive/ history preserved for that work. READY TO COMMIT lines per Rule 11 remain mandatory — nothing else about the shipping flow changes. |
-| — | **Agent 7 (Prototype Author)** | **RETIRED 2026-06-03 (gov-v14).** Persona retired; Codex is now a tool any mainline brother summons via `scripts/engines/`. See the gov-v14 amendment at the top + `agents/THE_PASSING_2026-06-03.md`. Row kept for history. |
+| — | **Agent 7 (Prototype Author)** | **RETIRED 2026-06-03 as a separate roster slot.** Under gov-v15, Codex may still occupy Agent 0-5 when explicitly summoned; there is just no extra Agent 7 persona. Row kept for history. |
+
+The hierarchy attaches to the role slot, not the substrate. A Codex-held Agent 0 has Coordinator authority for the scoped session; a Claude-held Agent 0 has the same authority; a future model-held Agent 0 has the same authority. The same applies to every domain master slot.
 
 When Agent 0 overrides a domain master: the override justification must be posted in CONGRESS.md under "Agent 0 Synthesis" and directed explicitly to the domain master by name. "I outrank you" is not a justification. "Your approach creates X coupling that breaks Y contract because Z" is.
 
@@ -55,9 +113,11 @@ When Agent 0 overrides a domain master: the override justification must be poste
 | 4B | Sources (Tankorent + Tankoyomi) | `SourcesPage.*`, `TankorentPage.*`, `TankoyomiPage.*`, `src/core/torrent/*` (TorrentEngine, TorrentClient), `src/core/TorrentIndexer.h`, `src/core/TorrentResult.h`, `src/core/indexers/*` (Nyaa, PirateBay, 1337x, YTS, EZTV, ExtraTorrents, TorrentsCsv), `src/core/manga/*` (MangaDownloader, WeebCentralScraper, ReadComicsScraper), `dialogs/AddTorrentDialog.*`, `dialogs/TorrentFilesDialog.*`, `dialogs/AddMangaDialog.*`, `dialogs/SpeedLimitDialog.*`, `dialogs/SeedingRulesDialog.*`, `dialogs/QueueLimitsDialog.*` | — |
 | 5 | Library UX | `TileCard.*`, `TileStrip.*`, `ScannerUtils.*`, `LibraryScanner.*`, `BooksScanner.*`, `VideosScanner.*`, `ContextMenuHelper.*`, plus **day-to-day library UX across every mode** — comics, books, videos, stream library pages are Agent 5's working surface (see primary-vs-secondary note below) | — |
 | 6 | Objective Compliance Reviewer | `agents/REVIEW.md` exclusively. Writes NO code. Reads Agents 1-5 output against the **stated objective** of the work — which may be an external reference (Mihon, groundwork, Tankoban-Max), a planning doc (NATIVE_D3D11_TODO.md, Congress motion), a Hemanth brief in chat.md, a spec in an issue, or any explicit task description. Reports where delivery meets the objective and where it falls short. | — |
-| ~~7~~ | **RETIRED 2026-06-03 (gov-v14)** — Codex persona retired | Codex is now a tool summoned via `scripts/engines/` by any mainline brother (review / audit / second-perspective / bulk). The Trigger A/B/C/D protocol below is superseded by the gov-v14 cross-engine summon reflex. See `agents/THE_PASSING_2026-06-03.md`. | — |
+| ~~7~~ | **RETIRED 2026-06-03 as a separate roster slot** | Codex may be summoned as Agent 0-5 under gov-v15, or as a scoped helper/tool when no role is assigned. The old Trigger A/B/C/D Agent 7 protocol below is historical. | — |
 
 ### Primary vs Secondary Ownership (ratified 2026-04-14 per Hemanth via Agent 3 chat.md post)
+
+Agent names in this table are role slots. The file ownership does not change when the slot is run by Claude, Codex, DeepSeek, Gemini, or any future substrate explicitly summoned by Hemanth or Agent 0.
 
 **Primary scope** = files an agent edits freely in pursuit of their subsystem goals. No coordination required beyond the usual shared-file heads-up.
 
@@ -228,7 +288,7 @@ REQUEST IMPLEMENTATION — [Agent N, <task>]:
 ```
 Hemanth copies the REQUEST block into his Codex desktop GUI (which has this repo loaded). Codex reads the REQUEST block + `CLAUDE.md` + `GOVERNANCE.md` + `STATUS.md` + the requesting agent's active TODO + cited references, then performs the implementation work in the listed `src/` / `native_sidecar/src/` paths. Codex compile-verifies (`build_check.bat` or `native_sidecar/build.ps1`), runs smoke via Windows-MCP if the task warrants it, and flags `READY TO COMMIT - [Agent N (Codex), <work>]: <subject>` lines per Rule 11. Agent 0 sweeps commits. The `(Codex)` parenthetical in the RTC tag preserves substrate attribution in git log.
 
-**Why Trigger D exists:** relief valve when a domain Claude agent is rate-limited, hitting 500s, or stuck in a fix-loop — or simply when the domain agent judges the task is better executed on a different substrate. The domain agent keeps ownership by authoring the REQUEST block (they define scope, files, constraints, exit criterion); Codex just executes inside that envelope. Not a substrate-swap (no Codex-as-Agent-N identity claim); Codex remains Agent 7 across all triggers, just with implementation authority under Trigger D specifically.
+**Why Trigger D existed:** relief valve when a domain Claude agent was rate-limited, hitting 500s, or stuck in a fix-loop — or simply when the domain agent judged the task better executed on a different substrate. Under gov-v15, use the model-agnostic role rule at the top of this file instead: Codex may be explicitly summoned as Agent 0-5, or used as a scoped helper/tool when no role is assigned.
 
 **Trigger D prompt shape (clarified 2026-05-19):** the dry `Scope: / Files: / References: / Exit criterion: / Anti-scope:` field list above is the formal contract — the actual prose used in chat.md is **conversational with strategic framing** (SUBJECT line + framing paragraph + PART A/B sections with item-by-item numbered work + DELIVERABLE shape + estimated LOC + closing line). The Scope/Files/etc fields are EMBEDDED in the prose, not separate bullets. See memory `feedback_trigger_d_prompt_template.md` for the canonical shape per Hemanth's 2026-05-19 example. Hemanth's standing rule: *"I just want a simple prompt from the agents, and I will copy-paste it. We don't need to overcomplicate it."*
 
@@ -342,6 +402,8 @@ The brotherhood is tightly coupled already (7 files of governance, Congress, rev
 ---
 
 ## Engine Switching Protocol (added 2026-05-28 — gov-v10)
+
+**gov-v15 reading:** this section now applies to any model/substrate occupying an Agent 0-5 role. Historical mentions of Agent 7/Codex or Agent 9/DeepSeek are substrate examples, not separate live roster slots. Prefer `[Agent N (Codex)]`, `[Agent N (DeepSeek)]`, `[Agent N (Opus)]`, etc. for current work.
 
 A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engine. The same slot may run on Claude/Opus one wake, DeepSeek V4-Pro (the Agent 9 tab) the next, or hand a leg to Codex. This protocol makes that switch seamless. It consolidates conventions previously scattered across `project_agent9.md`, the routing report, and the commit/handoff rules.
 
@@ -561,6 +623,24 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
 
     (Added 2026-05-21 after Codex burned multiple wait-loop cycles during a build-state collision on 2026-05-20→2026-05-21 wake. Lease-registry-primary at gov-v7 same day after Codex commission `210ba32` shipped the registry. Per-lane build dirs via commission `07da143` shipped same day — bypasses the shared lock when used.)
 
+23. **Tankoban 3 commits push to `origin` immediately (gov-v18, Hemanth directive 2026-06-17).** Every commit that lands on a **Tankoban 3** repository — the main `C:\Users\Suprabha\Desktop\Tankoban 3` clone, the `C:\Users\Suprabha\Desktop\Tankoban-3-player` clone, or any other clone of `github.com/kingoftheseas56/Tankoban-3` — MUST be pushed to GitHub (`git push origin <branch>`) as part of the same shipping action that created it. No Tankoban 3 commit is allowed to sit local-only. This covers feature-branch commits, checkpoint commits, AND master merges: the moment a TB3 commit exists, the next step is the push. GitHub is the source of truth for Tankoban 3, so the local tree and `origin` never silently diverge.
+
+    **Scope — TB3 only; Tankoban 2 is unchanged.** This rule applies ONLY to Tankoban 3 repos. Tankoban 2 keeps its existing flow: master stays local, there is no routine-push requirement, and Rule 11's commit paths govern it. Do NOT start auto-pushing Tankoban 2.
+
+    **Mechanics.** Whoever creates the commit pushes it. After any TB3 `git commit` / `git merge`, run `git push origin <branch>` and confirm `origin/<branch>` advanced to the new SHA before calling the work done. A push that is rejected (non-fast-forward), needs auth, or otherwise fails is surfaced to Hemanth — never left silently un-pushed.
+
+    **Honesty / enforcement.** Discipline-strength, NOT CI-gated: CI cannot force a push, and the TB3 clones live outside the Tankoban 2 governance-gate's reach (see Must-hold invariants below). It rides on agent discipline. The completion claim for any TB3 work is therefore not "committed" but **"committed AND pushed (`origin/<branch> = <sha>`)."**
+
+    (Added 2026-06-17 per Hemanth verbatim: *"Every Tankoban 3 commit must also [be] pushed on to github."* Authored under temporary Agent 0 powers granted to the player-track session that rescued + merged the Harbor chrome/audio checkout.)
+
+24. **Tankoban 2 is the brotherhood's base / home folder — brothers operate FROM here (gov-v19, Hemanth directive 2026-06-19).** `C:\Users\Suprabha\Desktop\Tankoban 2` is the brotherhood's permanent base of operations — its office, not its product. The full brotherhood workspace lives here: this `agents/` tree, governance, `chat.md`, `routes.yml`, STATUS, the recaps, and the claude-mem memory that auto-surfaces at wake — and that lived memory is what makes a wake here start *warm* instead of cold. Brothers do NOT need to relocate into Tankoban 3's workspace (or any other app folder) to work on it: open your session HERE and reach into `C:\Users\Suprabha\Desktop\Tankoban 3` (or any clone) with your normal tools (`Read`/`Write`/`Edit`, `Bash` / `git -C <path>`, MCP). The app being built and the room the brotherhood lives in are deliberately decoupled.
+
+    **Why (decided 2026-06-19).** The brotherhood went global + got backed up this day — kernel in `~/.claude`, governance + memory in `github.com/kingoftheseas56/Brotherhood` — so it is no longer *trapped* in TB2. But operating from TB2 has been frictionless, and the TB2 history is an asset, not weight: it is the warm-start memory. Relocating home into TB3 would throw that away (a fresh TB3 window wakes cold — no auto-recall; it loads only the thin global kernel and, per the model-agnostic role rule, stays a scoped helper until summoned as Agent 0) for no observed benefit. So TB2 stays home; TB3 and future apps are built from here.
+
+    **Practical.** For full-brotherhood work, work from a TB2 window (warm, Agent-0-aware) and operate on TB3 from there. A window opened directly in TB3 behaving as a scoped helper until you summon the role is correct, not a regression. Rule 23 (TB3 push-immediately) still governs any commit you make to a TB3 clone, wherever you run it from.
+
+    (Added 2026-06-19 per Hemanth verbatim: *"TB2 is our base folder.. they don't need to be in tankoban 3's workspace to do stuff, they can do it from right here."* Followed the brotherhood-migration wake that globalized + backed up the brotherhood — the migration made TB2 non-mandatory as home; Hemanth's call is to keep it home anyway, because it works and stays warm.)
+
 ---
 
 ## Office Protocol
@@ -614,11 +694,11 @@ Behavioral/judgment rules (Hemanth-language, "don't menu Hemanth", commit cadenc
 
 ## Review Gate — verify against a written Definition of Done (added 2026-06-02)
 
-Cross-model review (Codex/Agent 9 reviewing a brother's diff) is necessary but INSUFFICIENT on its own. Per deep-research 2026-06-02: a reviewer without a written specification checks "code against code, not code against intent" — it shares blind spots with the author and cannot flag what was never specified. Diversity (a different model) reduces correlated error; a written spec eliminates the circularity. **Both are required**, and we had only the diversity half.
+Cross-model review (a different model/substrate reviewing a brother's diff) is necessary but INSUFFICIENT on its own. Per deep-research 2026-06-02: a reviewer without a written specification checks "code against code, not code against intent" — it shares blind spots with the author and cannot flag what was never specified. Diversity (a different model) reduces correlated error; a written spec eliminates the circularity. **Both are required**, and we had only the diversity half.
 
 So every non-trivial review checks the diff against a **Definition of Done (DoD)** — the written acceptance criteria — not just for code correctness:
 
 1. **The work carries its intent.** A plan / fix-TODO already has an Acceptance Criteria section; that IS the DoD. For ad-hoc work, the RTC carries a `Done-when:` field (see `CONTRACTS.md`).
-2. **The review handoff includes the DoD.** When you hand a diff to a reviewer (Codex/Agent 9), give them the DoD and ask them to confirm the diff SATISFIES each criterion AND flag anything the diff does that the DoD never asked for. Package it with `/codex-review`.
+2. **The review handoff includes the DoD.** When you hand a diff to a reviewer (Codex, DeepSeek, Gemini, Claude, or another available substrate), give them the DoD and ask them to confirm the diff SATISFIES each criterion AND flag anything the diff does that the DoD never asked for. Package it with `/codex-review` or the current substrate-appropriate handoff.
 3. **Producer != reviewer.** Never let the model that produced the code be its only reviewer — a model silently endorses ~1-in-3 of its own semantic-drift bugs while able to articulate the exact defect (deep-research 2026-06-02). The reviewer is always a different model/agent.
 4. **Honesty:** this is convention-strength — "I checked against the DoD" is judgment and cannot be CI-gated. What IS mechanical: the `/codex-review` handoff template REQUIRES a DoD, so the reviewer always has the intent in hand. Pairs with the must-hold CI gate above (gate = catastrophic/rot caught mechanically; Review Gate = "plausible-but-wrong / off-intent" caught by a different model checking written criteria).
