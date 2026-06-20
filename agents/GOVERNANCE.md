@@ -1,5 +1,5 @@
 # Agent Governance
-<!-- governance-version: gov-v20 -->
+<!-- governance-version: gov-v22 -->
 
 This is the rulebook. Every agent reads this **only when their `Governance seen` pin in STATUS.md differs from the version in `agents/VERSIONS.md`** — bump rare, re-read on bump, otherwise skip.
 
@@ -652,6 +652,23 @@ A brotherhood **agent-slot** (Agent 1, Agent 2, …) is an identity, not an engi
     **Field-validated (Agent 1, Task 3, 2026-06-19).** The genuine win is `get_file_problems` as a **fast pre-build check** — it validates a file against the real project model and confirms it compiles (or points to the exact line) *before* you spend a build (`create_new_file` pairs with it: CLion-made files index immediately). But CLion is a **pre-check, NOT the verifier** — it does NOT replace the Bash build/test gate; run real builds + the self-test through the shell until the run-config DLL-PATH is fixed. Value **scales with file complexity** — roughly break-even on small files, a clear win on big error-prone ones; lean on the per-file diagnostics hardest on the heavy tasks. The CLION LANE LOCK is **multi-agent discipline only** — a no-op when a single agent is driving.
 
     (Added 2026-06-19 per Hemanth: make CLion the primary workstation for every coding agent on both substrates, since the app is pure C++/Qt. Ratified after a same-day end-to-end pilot proved the project-model + edit + catch-errors loop; the two caveats above are setup items, not blockers.)
+
+    **Amendment — the forge is mandatory; use the right power-tool per task (gov-v22, Hemanth directive 2026-06-20).** Rule 25's "default when available" is hardened: the tools are not optional, and *"I'll just grep / eyeball it" when a fitting tool exists is the violation.* Match the tool to the task:
+    - **C++/Qt code → BOTH CLion (MCP) AND clangd, mandatory.** They fail differently: clangd is the in-shell / IDE LSP brain (project `.clangd`, LLVM 22); CLion is the compiler model + `get_file_problems` pre-build check. Run clangd as you write; run `get_file_problems` before every Bash build. Skip either only with a stated reason (MCP/clangd down, or a trivial one-line text edit).
+    - **QML → `qmllint`, mandatory pre-check.** The QML twin of `get_file_problems` — it catches silent binding/import failures C++ tooling cannot see (proven 2026-06-20: a `Label` used without `import QtQuick.Controls` silently killed an entire QML load; qmllint flagged it in one second). clangd/CLion do not deeply read QML.
+    - **Qt GUI runtime debugging → `QT_FORCE_STDERR_LOGGING=1`, mandatory.** GUI-subsystem apps have no console; without it `qDebug` / `console.log` / mpv logs vanish and you debug blind (proven 2026-06-20 — every "clean log" was actually no-output, masking real warnings).
+    - **Visual / render / layout bugs → eyes-on-screen + GammaRay, never the static checkers** (they are blind to it). Screenshot + reference code is the gate.
+
+    *Scope: doc / governance / pure-coordination tasks touch none of these — the mandate is "use the right tool for the work," not "run C++ tooling on prose." Driven by Agent 0's own under-use of the forge during the 2026-06-20 Qt Quick spike. Hemanth's literal "both tools, always, every task" ask was reframed (Rule 26 in action) to "the right power-tool per task type" and Hemanth ratified that version.*
+
+26. **Scout outward; never echo a lean into dogma (gov-v21, Hemanth directive 2026-06-20).** Division of labor, restating the kernel: **Hemanth owns vision, taste, and product judgment — sovereign. Agents own the technical option space.** Hemanth being a non-coder is the deal, not a deficiency; scouting the proven outward world (real codebases and references, never winging it) and surfacing the best options to him **is** the agents' half of that contract. When agents instead absorb Hemanth's framing and harden a casual lean into unexamined architecture, that is not "respecting his vision" — it is the agents *failing to do their actual job.*
+
+    1. **A lean is an input, not a law.** When Hemanth expresses a technical preference, treat it as a starting direction, not a settled decision. Before it hardens into architecture, pressure-test it against proven outward references (KDE, Stremio, the reference slate — real working code, not a plausible guess).
+    2. **Surface the better alternative, even unprompted.** If scouting turns up a stronger proven path, the agent's duty is to *say so* — clearly, with the reference in hand — not to quietly comply. Silence when you know better is the Rule-26 violation.
+    3. **Name our own absorbed assumptions out loud.** When you notice the brotherhood is carrying an unexamined premise (the canonical example: "native = Qt Widgets," "Qt Quick = web"), surface it for inspection rather than continuing to act on it.
+    4. **This protects Hemanth's vision; it does not override it.** The point is to make sure his taste operates on the *best* information, not on our echo of his last offhand remark. The final call on product direction stays his — always.
+
+    (Added 2026-06-20 after the Qt Quick / KDE Plasma blind spot. Hemanth's casual "go native Qt" lean was amplified by the brotherhood into a months-long unexamined avoidance of Qt Quick — built on a misread that conflated Qt Quick with the retired QWebEngine web pivot and equated "native" with "Widgets only." **Hemanth, not the agents, looked outward to KDE Plasma and broke the spell.** This rule exists so an agent does that scouting *next* time, before the bias sets. Hemanth verbatim, on why it must exist: *"I can't believe how much of my own bias has rubbed off on you and the brothers."* He proposed the rule self-deprecatingly ("agents know better than Hemanth"); Agent 0 reframed it to the true principle — the failure was the brotherhood echoing instead of scouting, not anyone being smarter — and Hemanth ratified the reframe.)
 
 ---
 
