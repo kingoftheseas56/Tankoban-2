@@ -1,5 +1,21 @@
 {
   "mcpServers": {
+    "clion": {
+      "type": "stdio",
+      "env": {
+        "IJ_MCP_SERVER_PORT": "64342"
+      },
+      "command": "C:\\Program Files\\JetBrains\\CLion 2026.1.3\\jbr\\bin\\java",
+      "args": [
+        "-classpath",
+        "C:\\Program Files\\JetBrains\\CLion 2026.1.3\\plugins\\mcpserver\\lib\\mcpserver-frontend.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\util-8.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.kotlinx.coroutines.core.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.ktor.client.cio.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.ktor.client.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.ktor.network.tls.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.ktor.io.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.ktor.utils.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.kotlinx.io.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.kotlinx.serialization.core.jar;C:\\Program Files\\JetBrains\\CLion 2026.1.3\\lib\\intellij.libraries.kotlinx.serialization.json.jar",
+        "com.intellij.mcpserver.stdio.McpStdioRunnerKt"
+      ]
+    },
+    "qtcreator": {
+      "type": "sse",
+      "url": "http://127.0.0.1:3749/sse"
+    },
     "pywinauto-mcp": {
       "command": "C:\\Users\\Suprabha\\.local\\bin\\pywinauto-mcp.exe",
       "args": []
